@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="nb">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Escape Box</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-elev: #131923;
+    --bg-card: #1a212d;
+    --border: #2a3441;
+    --text: #e8eef5;
+    --text-dim: #8a98a8;
+    --accent: #ff4444;
+    --accent-2: #ffb84d;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #ef4444;
+    --glow: 0 0 20px rgba(255, 68, 68, 0.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(circle at 20% 0%, rgba(255, 68, 68, 0.08) 0%, transparent 50%),
+      radial-gradient(circle at 80% 100%, rgba(255, 184, 77, 0.06) 0%, transparent 50%);
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .logo {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 28px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+  }
+  .logo span { color: var(--accent); }
+  .nav { display: flex; gap: 16px; }
+  .nav button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .nav button:hover, .nav button.active {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(255, 68, 68, 0.08);
+  }
+
+  .ws-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .ws-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .ws-dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
+  .ws-dot.error { background: var(--danger); }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 18px;
+    letter-spacing: 3px;
+    margin-bottom: 16px;
+    color: var(--accent-2);
+  }
+
+  /* Forms */
+  label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+  input, select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    margin-bottom: 14px;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--glow);
+  }
+
+  button.btn {
+    background: var(--accent);
+    border: none;
+    color: white;
+    padding: 12px 24px;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  button.btn:hover { background: #ff6666; box-shadow: var(--glow); }
+  button.btn:disabled { background: var(--border); cursor: not-allowed; }
+  button.btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button.btn.secondary:hover { border-color: var(--accent); }
+  button.btn.success { background: var(--success); color: var(--bg); }
+  button.btn.danger { background: var(--danger); }
+  button.btn.small { padding: 6px 12px; font-size: 11px; }
+
+  /* Timer */
+  .timer {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 84px;
+    text-align: center;
+    letter-spacing: 6px;
+    padding: 32px;
+    color: var(--accent-2);
+    text-shadow: 0 0 30px rgba(255, 184, 77, 0.4);
+  }
+  .timer.warning { color: var(--warning); animation: pulse 1s infinite; }
+  .timer.danger { color: var(--danger); animation: pulse 0.5s infinite; }
+  @keyframes pulse { 50% { opacity: 0.6; } }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+  /* Live sessions grid */
+  .sessions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .session-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 16px;
+    border-left: 3px solid var(--accent);
+    transition: all 0.2s;
+  }
+  .session-card.urgent { border-left-color: var(--danger); animation: pulse 1s infinite; }
+  .session-card .team-name { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  .session-card .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 4px; }
+  .session-card .session-timer { font-size: 24px; color: var(--accent-2); margin: 8px 0; font-family: 'Major Mono Display', monospace; }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+  .stat { text-align: center; padding: 16px; background: var(--bg-elev); border: 1px solid var(--border); }
+  .stat .num { font-family: 'Major Mono Display', monospace; font-size: 36px; color: var(--accent-2); }
+  .stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .badge.active { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+  .badge.completed { background: rgba(255, 184, 77, 0.2); color: var(--accent-2); }
+  .badge.failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    padding: 16px 20px;
+    box-shadow: var(--glow);
+    z-index: 100;
+    animation: slideIn 0.3s ease-out;
+  }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } }
+
+  .hidden { display: none !important; }
+
+  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 140px; }
+
+  .code-display {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 32px;
+    letter-spacing: 8px;
+    text-align: center;
+    padding: 16px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    color: var(--accent-2);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="logo">Escape<span>::</span>Box</div>
+    <div style="display:flex; align-items:center; gap:24px;">
+      <div class="ws-status">
+        <span class="ws-dot" id="ws-dot"></span>
+        <span id="ws-status-text">Tilkobler...</span>
+      </div>
+      <nav class="nav">
+        <button data-view="play" class="active">Spill</button>
+        <button data-view="leaderboard">Leaderboard</button>
+        <button data-view="admin">Admin</button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- VIEW: PLAY -->
+  <section id="view-play">
+    <div id="play-start" class="card">
+      <h2>Start Spill</h2>
+      <div class="row">
+        <div>
+          <label>Lagkode</label>
+          <input id="play-code" maxlength="6" placeholder="ABC1" style="text-transform: uppercase;" />
+        </div>
+        <div>
+          <label>Boks</label>
+          <select id="play-box">
+            <option value="HEIST">Heist</option>
+            <option value="LABYRINT">Labyrint</option>
+            <option value="DETEKTIV">Detektiv</option>
+          </select>
+        </div>
+        <div>
+          <label>Tidsgrense (min)</label>
+          <input id="play-time-limit" type="number" value="60" min="5" max="180" />
+        </div>
+        <div style="flex:0;">
+          <button class="btn" onclick="startGame()">Start</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="play-active" class="hidden">
+      <div class="card">
+        <h2 id="play-team-name">Lag</h2>
+        <div class="timer" id="play-timer">60:00</div>
+        <div class="row" style="margin-top: 16px;">
+          <button class="btn success" onclick="logEvent('puzzle_solved')">Puzzle løst</button>
+          <button class="btn secondary" onclick="logEvent('hint_used')">Bruk hint</button>
+          <button class="btn" onclick="finishGame(true)">Fullført!</button>
+          <button class="btn danger" onclick="finishGame(false)">Avbryt</button>
+        </div>
+        <div style="margin-top: 24px; display:flex; gap:24px; justify-content: center;">
+          <div class="stat" style="background:none; border:none;">
+            <div class="num" id="play-puzzle">0</div>
+            <div class="label">Puzzle</div>
+          </div>
+          <div class="stat" style="background:none; border:none;">
+            <div class="num" id="play-hints">0</div>
+            <div class="label">Hint brukt</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VIEW: LEADERBOARD -->
+  <section id="view-leaderboard" class="hidden">
+    <div class="card">
+      <h2>Leaderboard</h2>
+      <div class="stats-grid" id="lb-stats"></div>
+    </div>
+    <div class="card">
+      <h2>Topp 50</h2>
+      <table id="lb-table">
+        <thead>
+          <tr><th>#</th><th>Lag</th><th>Boks</th><th>Tid</th><th>Hint</th><th>Dato</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- VIEW: ADMIN -->
+  <section id="view-admin" class="hidden">
+    <div id="admin-login" class="card">
+      <h2>Admin Login</h2>
+      <label>Brukernavn</label>
+      <input id="admin-user" autocomplete="username" />
+      <label>Passord</label>
+      <input id="admin-pass" type="password" autocomplete="current-password" />
+      <button class="btn" onclick="adminLogin()">Logg inn</button>
+    </div>
+
+    <div id="admin-panel" class="hidden">
+      <div class="card">
+        <h2>Live Sesjoner</h2>
+        <div class="sessions-grid" id="admin-active-sessions">
+          <p style="color:var(--text-dim)">Ingen aktive sesjoner.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Lag</h2>
+        <div class="row" style="margin-bottom:16px;">
+          <input id="new-team-name" placeholder="Lagnavn" />
+          <button class="btn" onclick="createTeam()" style="flex:0;">Opprett lag</button>
+        </div>
+        <table id="teams-table">
+          <thead><tr><th>Navn</th><th>Kode</th><th>Sesjoner</th><th>Fullført</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Historikk (siste 200)</h2>
+        <table id="history-table">
+          <thead><tr><th>Lag</th><th>Boks</th><th>Status</th><th>Tid</th><th>Hint</th><th>Startet</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <button class="btn secondary" onclick="adminLogout()">Logg ut</button>
+    </div>
+  </section>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+  // ============================================================
+  //  KONFIG  ---  endre API_URL til din Railway-URL etter deploy
+  // ============================================================
+  const API_URL = window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : 'https://DIN-RAILWAY-APP.up.railway.app';
+  const WS_URL = API_URL.replace(/^http/, 'ws') + '/ws';
+
+  // ============================================================
+  //  STATE
+  // ============================================================
+  let state = {
+    view: 'play',
+    activeSession: null,
+    timerInterval: null,
+    adminToken: localStorage.getItem('escapebox_admin_token'),
+    ws: null,
+    wsReconnectTimer: null,
+  };
+
+  // ============================================================
+  //  HELPERS
+  // ============================================================
+  const $ = (id) => document.getElementById(id);
+  const fmt = (sec) => {
+    if (sec == null) return '--:--';
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+  const toast = (msg, type = 'info') => {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.remove('hidden');
+    t.style.borderColor = type === 'error' ? 'var(--danger)' : 'var(--accent)';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.add('hidden'), 3000);
+  };
+
+  async function api(path, opts = {}) {
+    const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    if (state.adminToken && opts.admin) headers.Authorization = 'Bearer ' + state.adminToken;
+    const res = await fetch(API_URL + path, { ...opts, headers });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'API-feil');
+    return data;
+  }
+
+  // ============================================================
+  //  WEBSOCKET
+  // ============================================================
+  function connectWS() {
+    if (state.ws?.readyState === WebSocket.OPEN) return;
+    try {
+      state.ws = new WebSocket(WS_URL);
+    } catch (e) {
+      $('ws-dot').classList.add('error');
+      $('ws-status-text').textContent = 'Feil';
+      return;
+    }
+    state.ws.onopen = () => {
+      $('ws-dot').classList.add('connected');
+      $('ws-dot').classList.remove('error');
+      $('ws-status-text').textContent = 'Live';
+    };
+    state.ws.onclose = () => {
+      $('ws-dot').classList.remove('connected');
+      $('ws-status-text').textContent = 'Frakoblet';
+      clearTimeout(state.wsReconnectTimer);
+      state.wsReconnectTimer = setTimeout(connectWS, 3000);
+    };
+    state.ws.onerror = () => {
+      $('ws-dot').classList.add('error');
+    };
+    state.ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        handleWSMessage(msg);
+      } catch {}
+    };
+  }
+
+  function handleWSMessage(msg) {
+    if (msg.type === 'session_started' || msg.type === 'session_event' || msg.type === 'session_finished') {
+      // Hvis admin er pålogget og ser admin-panel, oppdater
+      if (state.view === 'admin' && state.adminToken) {
+        loadAdminData();
+      }
+    }
+  }
+
+  // ============================================================
+  //  NAV
+  // ============================================================
+  document.querySelectorAll('.nav button').forEach(btn => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
+  function switchView(view) {
+    state.view = view;
+    document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    ['play', 'leaderboard', 'admin'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
+    if (view === 'leaderboard') loadLeaderboard();
+    if (view === 'admin' && state.adminToken) {
+      $('admin-login').classList.add('hidden');
+      $('admin-panel').classList.remove('hidden');
+      loadAdminData();
+    }
+  }
+
+  // ============================================================
+  //  PLAY
+  // ============================================================
+  async function startGame() {
+    try {
+      const code = $('play-code').value.trim().toUpperCase();
+      const box = $('play-box').value;
+      const limit = parseInt($('play-time-limit').value, 10) * 60;
+      if (!code) return toast('Skriv inn lagkode', 'error');
+      const session = await api('/api/sessions/start', {
+        method: 'POST',
+        body: JSON.stringify({ team_code: code, box_name: box, time_limit_seconds: limit })
+      });
+      state.activeSession = session;
+      $('play-team-name').textContent = session.team_name;
+      $('play-start').classList.add('hidden');
+      $('play-active').classList.remove('hidden');
+      startTimer();
+      toast('Spill startet!');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function startTimer() {
+    clearInterval(state.timerInterval);
+    const startTime = new Date(state.activeSession.started_at).getTime();
+    const limit = state.activeSession.time_limit_seconds;
+    const tick = () => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const remaining = Math.max(0, limit - elapsed);
+      const el = $('play-timer');
+      el.textContent = fmt(remaining);
+      el.classList.toggle('warning', remaining <= 600 && remaining > 60);
+      el.classList.toggle('danger', remaining <= 60);
+      if (remaining === 0) {
+        clearInterval(state.timerInterval);
+        finishGame(false);
+      }
+    };
+    tick();
+    state.timerInterval = setInterval(tick, 1000);
+  }
+
+  async function logEvent(type) {
+    if (!state.activeSession) return;
+    try {
+      const res = await api(`/api/sessions/${state.activeSession.id}/event`, {
+        method: 'POST',
+        body: JSON.stringify({
+          puzzle_index: state.activeSession.current_puzzle,
+          event_type: type
+        })
+      });
+      state.activeSession = res.session;
+      $('play-puzzle').textContent = res.session.current_puzzle;
+      $('play-hints').textContent = res.session.hints_used;
+      toast(type === 'puzzle_solved' ? 'Puzzle løst!' : 'Hint brukt');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function finishGame(completed) {
+    if (!state.activeSession) return;
+    try {
+      await api(`/api/sessions/${state.activeSession.id}/finish`, {
+        method: 'POST',
+        body: JSON.stringify({ completed })
+      });
+      clearInterval(state.timerInterval);
+      state.activeSession = null;
+      $('play-active').classList.add('hidden');
+      $('play-start').classList.remove('hidden');
+      toast(completed ? '🎉 Gratulerer!' : 'Spill avsluttet');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  // ============================================================
+  //  LEADERBOARD
+  // ============================================================
+  async function loadLeaderboard() {
+    try {
+      const [lb, stats] = await Promise.all([
+        api('/api/stats/leaderboard'),
+        api('/api/stats/stats')
+      ]);
+      const s = stats.overall;
+      $('lb-stats').innerHTML = `
+        <div class="stat"><div class="num">${s.total_sessions || 0}</div><div class="label">Total spill</div></div>
+        <div class="stat"><div class="num">${s.completed_sessions || 0}</div><div class="label">Fullførte</div></div>
+        <div class="stat"><div class="num">${s.active_sessions || 0}</div><div class="label">Aktive nå</div></div>
+        <div class="stat"><div class="num">${fmt(Math.round(s.avg_duration || 0))}</div><div class="label">Snitt tid</div></div>
+      `;
+      const tbody = $('lb-table').querySelector('tbody');
+      tbody.innerHTML = lb.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td><strong>${r.team_name}</strong></td>
+          <td>${r.box_name}</td>
+          <td>${fmt(r.duration_seconds)}</td>
+          <td>${r.hints_used}</td>
+          <td>${new Date(r.finished_at).toLocaleDateString('nb-NO')}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="6" style="color:var(--text-dim)">Ingen resultater enda</td></tr>';
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  // ============================================================
+  //  ADMIN
+  // ============================================================
+  async function adminLogin() {
+    try {
+      const res = await api('/api/auth/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: $('admin-user').value,
+          password: $('admin-pass').value
+        })
+      });
+      state.adminToken = res.token;
+      localStorage.setItem('escapebox_admin_token', res.token);
+      $('admin-login').classList.add('hidden');
+      $('admin-panel').classList.remove('hidden');
+      loadAdminData();
+      toast('Innlogget');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function adminLogout() {
+    state.adminToken = null;
+    localStorage.removeItem('escapebox_admin_token');
+    $('admin-panel').classList.add('hidden');
+    $('admin-login').classList.remove('hidden');
+  }
+
+  async function loadAdminData() {
+    try {
+      const [active, teams, history] = await Promise.all([
+        api('/api/sessions/active', { admin: true }),
+        api('/api/teams', { admin: true }),
+        api('/api/sessions', { admin: true })
+      ]);
+      renderActiveSessions(active);
+      renderTeams(teams);
+      renderHistory(history);
+    } catch (e) {
+      if (e.message.includes('token')) adminLogout();
+      else toast(e.message, 'error');
+    }
+  }
+
+  function renderActiveSessions(sessions) {
+    const c = $('admin-active-sessions');
+    if (sessions.length === 0) {
+      c.innerHTML = '<p style="color:var(--text-dim)">Ingen aktive sesjoner.</p>';
+      return;
+    }
+    c.innerHTML = sessions.map(s => {
+      const elapsed = Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000);
+      const remaining = Math.max(0, s.time_limit_seconds - elapsed);
+      return `
+        <div class="session-card ${remaining < 600 ? 'urgent' : ''}">
+          <div class="team-name">${s.team_name}</div>
+          <div class="meta">${s.box_name} · kode ${s.team_code}</div>
+          <div class="session-timer">${fmt(remaining)}</div>
+          <div class="meta">Puzzle ${s.current_puzzle} · ${s.hints_used} hint</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderTeams(teams) {
+    const tbody = $('teams-table').querySelector('tbody');
+    tbody.innerHTML = teams.map(t => `
+      <tr>
+        <td><strong>${t.name}</strong></td>
+        <td><code style="color:var(--accent-2)">${t.code}</code></td>
+        <td>${t.sessions_count}</td>
+        <td>${t.completed_count}</td>
+        <td><button class="btn small danger" onclick="deleteTeam(${t.id}, '${t.name.replace(/'/g, "\\'")}')">Slett</button></td>
+      </tr>
+    `).join('') || '<tr><td colspan="5" style="color:var(--text-dim)">Ingen lag enda</td></tr>';
+  }
+
+  function renderHistory(sessions) {
+    const tbody = $('history-table').querySelector('tbody');
+    tbody.innerHTML = sessions.map(s => {
+      let badge = '<span class="badge active">Aktiv</span>';
+      if (s.status === 'finished') {
+        badge = s.completed
+          ? '<span class="badge completed">Fullført</span>'
+          : '<span class="badge failed">Avbrutt</span>';
+      }
+      return `
+        <tr>
+          <td><strong>${s.team_name}</strong></td>
+          <td>${s.box_name}</td>
+          <td>${badge}</td>
+          <td>${fmt(s.duration_seconds)}</td>
+          <td>${s.hints_used || 0}</td>
+          <td>${new Date(s.started_at).toLocaleString('nb-NO')}</td>
+        </tr>
+      `;
+    }).join('') || '<tr><td colspan="6" style="color:var(--text-dim)">Ingen historikk</td></tr>';
+  }
+
+  async function createTeam() {
+    try {
+      const name = $('new-team-name').value.trim();
+      if (!name) return toast('Skriv inn navn', 'error');
+      const team = await api('/api/teams', {
+        method: 'POST',
+        admin: true,
+        body: JSON.stringify({ name })
+      });
+      $('new-team-name').value = '';
+      toast(`Lag opprettet: kode ${team.code}`);
+      loadAdminData();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function deleteTeam(id, name) {
+    if (!confirm(`Slett laget "${name}"? Dette sletter også alle sesjoner.`)) return;
+    try {
+      await api('/api/teams/' + id, { method: 'DELETE', admin: true });
+      toast('Laget er slettet');
+      loadAdminData();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  INIT
+  // ============================================================
+  connectWS();
+  // Oppdater admin live-panel hvert 5. sek mens du ser det
+  setInterval(() => {
+    if (state.view === 'admin' && state.adminToken && !$('admin-panel').classList.contains('hidden')) {
+      api('/api/sessions/active', { admin: true })
+        .then(renderActiveSessions)
+        .catch(() => {});
+    }
+  }, 5000);
+</script>
+
+</body>
+</html>
