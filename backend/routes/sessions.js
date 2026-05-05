@@ -1,40 +1,47 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAdmin } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Hjelper: hent broadcast-funksjon
 function getBroadcast(req) {
   return req.app.get('broadcast') || (() => {});
 }
 
-// Start ny sesjon (offentlig - lag starter sitt spill)
+// Start sesjon for et lag (deltager-flyt)
 router.post('/start', async (req, res) => {
   try {
-    const { team_code, box_name, time_limit_seconds } = req.body;
-    if (!team_code || !box_name) {
-      return res.status(400).json({ error: 'team_code og box_name påkrevd' });
-    }
+    const { team_id } = req.body;
+    if (!team_id) return res.status(400).json({ error: 'team_id påkrevd' });
 
-    const teamRes = await pool.query(
-      'SELECT * FROM teams WHERE code = $1',
-      [team_code.toUpperCase()]
-    );
-    if (teamRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Ugyldig lagkode' });
-    }
+    const teamRes = await pool.query(`
+      SELECT t.*, e.scenario_id, e.status AS event_status, s.time_limit_seconds, s.name AS scenario_name
+      FROM teams t
+      JOIN events e ON e.id = t.event_id
+      LEFT JOIN scenarios s ON s.id = e.scenario_id
+      WHERE t.id = $1
+    `, [team_id]);
+
+    if (teamRes.rows.length === 0) return res.status(404).json({ error: 'Lag ikke funnet' });
     const team = teamRes.rows[0];
 
+    // Sjekk om sesjon allerede finnes
+    const existing = await pool.query(
+      `SELECT * FROM sessions WHERE team_id = $1 AND status = 'active' LIMIT 1`,
+      [team_id]
+    );
+    if (existing.rows.length > 0) {
+      return res.json(existing.rows[0]);
+    }
+
     const { rows } = await pool.query(
-      `INSERT INTO sessions (team_id, box_name, status, started_at, time_limit_seconds)
-       VALUES ($1, $2, 'active', NOW(), $3)
-       RETURNING *`,
-      [team.id, box_name, time_limit_seconds || 3600]
+      `INSERT INTO sessions (team_id, status, started_at, time_limit_seconds)
+       VALUES ($1, 'active', NOW(), $2) RETURNING *`,
+      [team_id, team.time_limit_seconds || 3600]
     );
 
-    const session = { ...rows[0], team_name: team.name, team_code: team.code };
-    getBroadcast(req)({ type: 'session_started', session });
+    const session = { ...rows[0], team_name: team.name, team_code: team.code, team_color: team.color };
+    getBroadcast(req)({ type: 'session_started', session, event_id: team.event_id });
     res.json(session);
   } catch (err) {
     console.error(err);
@@ -43,15 +50,15 @@ router.post('/start', async (req, res) => {
 });
 
 // Hent aktiv sesjon for et lag
-router.get('/active/:team_code', async (req, res) => {
+router.get('/active/:team_id', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT s.*, t.name AS team_name, t.code AS team_code
+      SELECT s.*, t.name AS team_name, t.code AS team_code, t.color AS team_color, t.event_id
       FROM sessions s
       JOIN teams t ON t.id = s.team_id
-      WHERE t.code = $1 AND s.status = 'active'
+      WHERE t.id = $1 AND s.status = 'active'
       ORDER BY s.started_at DESC LIMIT 1
-    `, [req.params.team_code.toUpperCase()]);
+    `, [req.params.team_id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Ingen aktiv sesjon' });
     res.json(rows[0]);
   } catch (err) {
@@ -60,7 +67,7 @@ router.get('/active/:team_code', async (req, res) => {
   }
 });
 
-// Logg event under spill (puzzle løst, hint brukt, etc)
+// Logg event
 router.post('/:id/event', async (req, res) => {
   try {
     const { puzzle_index, event_type, payload } = req.body;
@@ -72,7 +79,6 @@ router.post('/:id/event', async (req, res) => {
       [sessionId, puzzle_index || 0, event_type, payload || {}]
     );
 
-    // Oppdater current_puzzle / hints_used hvis relevant
     if (event_type === 'puzzle_solved') {
       await pool.query(
         'UPDATE sessions SET current_puzzle = $1 WHERE id = $2',
@@ -86,7 +92,7 @@ router.post('/:id/event', async (req, res) => {
     }
 
     const { rows } = await pool.query(`
-      SELECT s.*, t.name AS team_name, t.code AS team_code
+      SELECT s.*, t.name AS team_name, t.code AS team_code, t.color AS team_color, t.event_id
       FROM sessions s JOIN teams t ON t.id = s.team_id
       WHERE s.id = $1
     `, [sessionId]);
@@ -94,6 +100,7 @@ router.post('/:id/event', async (req, res) => {
     getBroadcast(req)({
       type: 'session_event',
       session: rows[0],
+      event_id: rows[0]?.event_id,
       event: { puzzle_index, event_type, payload }
     });
 
@@ -104,7 +111,7 @@ router.post('/:id/event', async (req, res) => {
   }
 });
 
-// Avslutt sesjon (gjennomført eller stoppet)
+// Avslutt sesjon
 router.post('/:id/finish', async (req, res) => {
   try {
     const { completed } = req.body;
@@ -116,14 +123,16 @@ router.post('/:id/finish', async (req, res) => {
           finished_at = NOW(),
           completed = $1,
           duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER
-      WHERE id = $2
-      RETURNING *
+      WHERE id = $2 RETURNING *
     `, [!!completed, sessionId]);
 
-    const teamRes = await pool.query('SELECT name, code FROM teams WHERE id = $1', [rows[0].team_id]);
-    const session = { ...rows[0], team_name: teamRes.rows[0].name, team_code: teamRes.rows[0].code };
+    const teamRes = await pool.query(
+      'SELECT t.name, t.code, t.color, t.event_id FROM teams t WHERE t.id = $1',
+      [rows[0].team_id]
+    );
+    const session = { ...rows[0], ...teamRes.rows[0] };
 
-    getBroadcast(req)({ type: 'session_finished', session });
+    getBroadcast(req)({ type: 'session_finished', session, event_id: session.event_id });
     res.json(session);
   } catch (err) {
     console.error(err);
@@ -131,32 +140,16 @@ router.post('/:id/finish', async (req, res) => {
   }
 });
 
-// Admin: alle aktive sesjoner (live oversikt)
-router.get('/active', requireAdmin, async (req, res) => {
+// Hent alle aktive sesjoner for et event (gamemaster-bruk)
+router.get('/event/:event_id/active', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT s.*, t.name AS team_name, t.code AS team_code
+      SELECT s.*, t.name AS team_name, t.code AS team_code, t.color AS team_color, t.event_id
       FROM sessions s
       JOIN teams t ON t.id = s.team_id
-      WHERE s.status = 'active'
+      WHERE t.event_id = $1 AND s.status = 'active'
       ORDER BY s.started_at DESC
-    `);
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server feil' });
-  }
-});
-
-// Admin: alle sesjoner (historikk)
-router.get('/', requireAdmin, async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT s.*, t.name AS team_name, t.code AS team_code
-      FROM sessions s
-      JOIN teams t ON t.id = s.team_id
-      ORDER BY s.started_at DESC LIMIT 200
-    `);
+    `, [req.params.event_id]);
     res.json(rows);
   } catch (err) {
     console.error(err);

@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -11,28 +12,105 @@ pool.on('error', (err) => {
   console.error('PostgreSQL pool error:', err);
 });
 
-// Idempotent migrasjoner i individuelle try/catch (samme mønster som BME Portal)
+// Idempotente migrasjoner i individuelle try/catch (samme mønster som BME Portal)
 async function initDatabase() {
   console.log('🔧 Initialiserer database...');
 
+  // Organisations (bedrifter)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS organizations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        slug VARCHAR(50) UNIQUE NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('  ✓ organizations');
+  } catch (e) { console.error('  ✗ organizations:', e.message); }
+
+  // Users (alle brukere — superadmin, org_admin, gamemaster, participant)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+        email VARCHAR(150) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        role VARCHAR(20) NOT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT users_role_check CHECK (role IN ('superadmin', 'org_admin', 'gamemaster', 'participant'))
+      )
+    `);
+    console.log('  ✓ users');
+  } catch (e) { console.error('  ✗ users:', e.message); }
+
+  // Scenarios (scenariobiblioteket — superadmin eier alle)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS scenarios (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        description TEXT,
+        time_limit_seconds INTEGER DEFAULT 3600,
+        created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('  ✓ scenarios');
+  } catch (e) { console.error('  ✗ scenarios:', e.message); }
+
+  // Utvid scenarios med scenario_data (JSONB med koordinater + innstillinger)
+  try {
+    await pool.query(`ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS scenario_data JSONB DEFAULT '{"coordinates":[],"settings":{}}'::jsonb`);
+    console.log('  ✓ scenarios.scenario_data');
+  } catch (e) { console.error('  ✗ scenarios alter:', e.message); }
+
+  // Events (en bedrift kjører et event basert på et scenario)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS events (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+        scenario_id INTEGER REFERENCES scenarios(id) ON DELETE SET NULL,
+        name VARCHAR(150) NOT NULL,
+        code VARCHAR(10) UNIQUE NOT NULL,
+        scheduled_at TIMESTAMPTZ,
+        status VARCHAR(20) DEFAULT 'planned',
+        created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT events_status_check CHECK (status IN ('planned', 'live', 'finished', 'cancelled'))
+      )
+    `);
+    console.log('  ✓ events');
+  } catch (e) { console.error('  ✗ events:', e.message); }
+
+  // Teams (lag som tilhører et event)
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
+        event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
         name VARCHAR(100) NOT NULL,
-        code VARCHAR(20) UNIQUE NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        code VARCHAR(10) NOT NULL,
+        pin VARCHAR(10) NOT NULL,
+        color VARCHAR(20) DEFAULT '#ff4444',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(event_id, code)
       )
     `);
     console.log('  ✓ teams');
   } catch (e) { console.error('  ✗ teams:', e.message); }
 
+  // Sessions (selve spilløkten)
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         id SERIAL PRIMARY KEY,
         team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        box_name VARCHAR(50) NOT NULL,
         status VARCHAR(20) DEFAULT 'pending',
         started_at TIMESTAMPTZ,
         finished_at TIMESTAMPTZ,
@@ -41,12 +119,14 @@ async function initDatabase() {
         completed BOOLEAN DEFAULT FALSE,
         hints_used INTEGER DEFAULT 0,
         current_puzzle INTEGER DEFAULT 0,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT sessions_status_check CHECK (status IN ('pending', 'active', 'finished', 'cancelled'))
       )
     `);
     console.log('  ✓ sessions');
   } catch (e) { console.error('  ✗ sessions:', e.message); }
 
+  // Puzzle events (logg over alt som skjer i en sesjon)
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puzzle_events (
@@ -61,33 +141,33 @@ async function initDatabase() {
     console.log('  ✓ puzzle_events');
   } catch (e) { console.error('  ✗ puzzle_events:', e.message); }
 
+  // Indekser for ytelse
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS admins (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    console.log('  ✓ admins');
-  } catch (e) { console.error('  ✗ admins:', e.message); }
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_org ON events(organization_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_teams_event ON teams(event_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_team ON sessions(team_id)`);
+    console.log('  ✓ indekser');
+  } catch (e) { console.error('  ✗ indekser:', e.message); }
 
-  // Seed default admin hvis ingen finnes
+  // Seed: opprett superadmin hvis ingen finnes
   try {
-    const { rows } = await pool.query('SELECT COUNT(*) FROM admins');
+    const { rows } = await pool.query(`SELECT COUNT(*) FROM users WHERE role = 'superadmin'`);
     if (parseInt(rows[0].count, 10) === 0) {
-      const bcrypt = require('bcryptjs');
-      const defaultPass = process.env.DEFAULT_ADMIN_PASSWORD || 'changeme123';
+      const defaultEmail = process.env.SUPERADMIN_EMAIL || '[email protected]';
+      const defaultPass = process.env.SUPERADMIN_PASSWORD || 'changeme123';
       const hash = await bcrypt.hash(defaultPass, 10);
       await pool.query(
-        'INSERT INTO admins (username, password_hash) VALUES ($1, $2)',
-        ['admin', hash]
+        `INSERT INTO users (email, password_hash, name, role)
+         VALUES ($1, $2, $3, 'superadmin')`,
+        [defaultEmail, hash, 'Superadmin']
       );
-      console.log(`  ✓ Default admin opprettet (admin / ${defaultPass})`);
+      console.log(`  ✓ Superadmin opprettet: ${defaultEmail} / ${defaultPass}`);
       console.log('  ⚠️  ENDRE PASSORD UMIDDELBART I PRODUKSJON');
     }
-  } catch (e) { console.error('  ✗ admin seed:', e.message); }
+  } catch (e) { console.error('  ✗ superadmin seed:', e.message); }
 
   console.log('✅ Database klar');
 }

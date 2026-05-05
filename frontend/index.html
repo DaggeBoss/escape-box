@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   :root {
     --bg: #0a0e14;
@@ -20,6 +21,7 @@
     --success: #4ade80;
     --warning: #fbbf24;
     --danger: #ef4444;
+    --info: #4dabf7;
     --glow: 0 0 20px rgba(255, 68, 68, 0.4);
   }
 
@@ -63,32 +65,26 @@
     padding: 20px 0 32px;
     border-bottom: 1px solid var(--border);
     margin-bottom: 32px;
+    flex-wrap: wrap;
+    gap: 16px;
   }
   .logo {
     font-family: 'Major Mono Display', monospace;
     font-size: 28px;
     letter-spacing: 4px;
     text-transform: uppercase;
+    cursor: pointer;
   }
   .logo span { color: var(--accent); }
-  .nav { display: flex; gap: 16px; }
-  .nav button {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    padding: 8px 16px;
-    font-family: inherit;
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 16px;
     font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.2s;
+    color: var(--text-dim);
   }
-  .nav button:hover, .nav button.active {
-    color: var(--text);
-    border-color: var(--accent);
-    background: rgba(255, 68, 68, 0.08);
-  }
+  .user-info strong { color: var(--text); }
 
   .ws-status {
     display: inline-flex;
@@ -121,10 +117,24 @@
     margin-bottom: 16px;
     color: var(--accent-2);
   }
+  .card h3 {
+    font-size: 14px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    color: var(--text-dim);
+  }
 
   /* Forms */
-  label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
-  input, select {
+  label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  input, select, textarea {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
@@ -134,7 +144,11 @@
     font-size: 14px;
     margin-bottom: 14px;
   }
-  input:focus, select:focus {
+  textarea {
+    min-height: 80px;
+    resize: vertical;
+  }
+  input:focus, select:focus, textarea:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: var(--glow);
@@ -159,9 +173,180 @@
   button.btn.secondary:hover { border-color: var(--accent); }
   button.btn.success { background: var(--success); color: var(--bg); }
   button.btn.danger { background: var(--danger); }
+  button.btn.info { background: var(--info); }
   button.btn.small { padding: 6px 12px; font-size: 11px; }
 
-  /* Timer */
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    padding: 12px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  th {
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .badge.role-superadmin { background: rgba(204, 93, 232, 0.2); color: #cc5de8; }
+  .badge.role-org_admin { background: rgba(77, 171, 247, 0.2); color: var(--info); }
+  .badge.role-gamemaster { background: rgba(255, 184, 77, 0.2); color: var(--accent-2); }
+  .badge.role-participant { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+  .badge.status-planned { background: rgba(138, 152, 168, 0.2); color: var(--text-dim); }
+  .badge.status-live { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+  .badge.status-finished { background: rgba(255, 184, 77, 0.2); color: var(--accent-2); }
+  .badge.status-active { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+  .badge.status-completed { background: rgba(255, 184, 77, 0.2); color: var(--accent-2); }
+  .badge.status-failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    padding: 16px 20px;
+    box-shadow: var(--glow);
+    z-index: 100;
+    animation: slideIn 0.3s ease-out;
+    max-width: 400px;
+  }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } }
+
+  .hidden { display: none !important; }
+
+  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 140px; }
+
+  /* Login screen */
+  .login-container {
+    max-width: 480px;
+    margin: 80px auto;
+  }
+  .login-container .card {
+    padding: 40px;
+  }
+
+  /* Code display */
+  .code-display {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 32px;
+    letter-spacing: 8px;
+    text-align: center;
+    padding: 16px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    color: var(--accent-2);
+  }
+
+  /* Team grid */
+  .team-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .team-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 16px;
+  }
+  .team-card .team-name {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .team-card .team-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .team-card .team-code {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 20px;
+    letter-spacing: 3px;
+    color: var(--accent-2);
+    margin: 8px 0;
+  }
+  .team-card .team-pin {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 16px;
+    letter-spacing: 4px;
+    color: var(--info);
+  }
+  .qr-code {
+    background: white;
+    padding: 12px;
+    margin: 12px 0;
+    display: inline-block;
+  }
+
+  /* Modal */
+  .modal-bg {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 32px;
+    max-width: 600px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal-close {
+    float: right;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 24px;
+    cursor: pointer;
+  }
+
+  /* Stat cards */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+  }
+  .stat {
+    text-align: center;
+    padding: 16px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+  }
+  .stat .num {
+    font-family: 'Major Mono Display', monospace;
+    font-size: 36px;
+    color: var(--accent-2);
+  }
+  .stat .label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+
+  /* Timer / play screen */
   .timer {
     font-family: 'Major Mono Display', monospace;
     font-size: 84px;
@@ -175,71 +360,38 @@
   .timer.danger { color: var(--danger); animation: pulse 0.5s infinite; }
   @keyframes pulse { 50% { opacity: 0.6; } }
 
-  /* Tables */
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
-  th { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-  tr:hover td { background: rgba(255, 255, 255, 0.02); }
-
-  /* Live sessions grid */
-  .sessions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-  .session-card {
-    background: var(--bg-elev);
-    border: 1px solid var(--border);
-    padding: 16px;
-    border-left: 3px solid var(--accent);
-    transition: all 0.2s;
+  /* Nav-tabs inside views */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+    flex-wrap: wrap;
   }
-  .session-card.urgent { border-left-color: var(--danger); animation: pulse 1s infinite; }
-  .session-card .team-name { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
-  .session-card .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 4px; }
-  .session-card .session-timer { font-size: 24px; color: var(--accent-2); margin: 8px 0; font-family: 'Major Mono Display', monospace; }
-
-  /* Stats */
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
-  .stat { text-align: center; padding: 16px; background: var(--bg-elev); border: 1px solid var(--border); }
-  .stat .num { font-family: 'Major Mono Display', monospace; font-size: 36px; color: var(--accent-2); }
-  .stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
-
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 2px;
-    font-size: 10px;
+  .tabs button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 12px 20px;
+    font-family: inherit;
+    font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
   }
-  .badge.active { background: rgba(74, 222, 128, 0.2); color: var(--success); }
-  .badge.completed { background: rgba(255, 184, 77, 0.2); color: var(--accent-2); }
-  .badge.failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
-
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    background: var(--bg-card);
-    border: 1px solid var(--accent);
-    padding: 16px 20px;
-    box-shadow: var(--glow);
-    z-index: 100;
-    animation: slideIn 0.3s ease-out;
-  }
-  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } }
-
-  .hidden { display: none !important; }
-
-  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
-  .row > * { flex: 1; min-width: 140px; }
-
-  .code-display {
-    font-family: 'Major Mono Display', monospace;
-    font-size: 32px;
-    letter-spacing: 8px;
-    text-align: center;
-    padding: 16px;
-    background: var(--bg);
-    border: 1px solid var(--accent);
+  .tabs button.active {
     color: var(--accent-2);
+    border-bottom-color: var(--accent);
+  }
+  .tabs button:hover { color: var(--text); }
+
+  .empty {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 32px;
+    font-style: italic;
   }
 </style>
 </head>
@@ -247,137 +399,22 @@
 
 <div class="container">
   <header>
-    <div class="logo">Escape<span>::</span>Box</div>
-    <div style="display:flex; align-items:center; gap:24px;">
-      <div class="ws-status">
-        <span class="ws-dot" id="ws-dot"></span>
-        <span id="ws-status-text">Tilkobler...</span>
-      </div>
-      <nav class="nav">
-        <button data-view="play" class="active">Spill</button>
-        <button data-view="leaderboard">Leaderboard</button>
-        <button data-view="admin">Admin</button>
-      </nav>
+    <div class="logo" onclick="goHome()">Escape<span>::</span>Box</div>
+    <div class="user-info" id="user-info"></div>
+    <div class="ws-status">
+      <span class="ws-dot" id="ws-dot"></span>
+      <span id="ws-status-text">Tilkobler...</span>
     </div>
   </header>
 
-  <!-- VIEW: PLAY -->
-  <section id="view-play">
-    <div id="play-start" class="card">
-      <h2>Start Spill</h2>
-      <div class="row">
-        <div>
-          <label>Lagkode</label>
-          <input id="play-code" maxlength="6" placeholder="ABC1" style="text-transform: uppercase;" />
-        </div>
-        <div>
-          <label>Boks</label>
-          <select id="play-box">
-            <option value="HEIST">Heist</option>
-            <option value="LABYRINT">Labyrint</option>
-            <option value="DETEKTIV">Detektiv</option>
-          </select>
-        </div>
-        <div>
-          <label>Tidsgrense (min)</label>
-          <input id="play-time-limit" type="number" value="60" min="5" max="180" />
-        </div>
-        <div style="flex:0;">
-          <button class="btn" onclick="startGame()">Start</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="play-active" class="hidden">
-      <div class="card">
-        <h2 id="play-team-name">Lag</h2>
-        <div class="timer" id="play-timer">60:00</div>
-        <div class="row" style="margin-top: 16px;">
-          <button class="btn success" onclick="logEvent('puzzle_solved')">Puzzle løst</button>
-          <button class="btn secondary" onclick="logEvent('hint_used')">Bruk hint</button>
-          <button class="btn" onclick="finishGame(true)">Fullført!</button>
-          <button class="btn danger" onclick="finishGame(false)">Avbryt</button>
-        </div>
-        <div style="margin-top: 24px; display:flex; gap:24px; justify-content: center;">
-          <div class="stat" style="background:none; border:none;">
-            <div class="num" id="play-puzzle">0</div>
-            <div class="label">Puzzle</div>
-          </div>
-          <div class="stat" style="background:none; border:none;">
-            <div class="num" id="play-hints">0</div>
-            <div class="label">Hint brukt</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- VIEW: LEADERBOARD -->
-  <section id="view-leaderboard" class="hidden">
-    <div class="card">
-      <h2>Leaderboard</h2>
-      <div class="stats-grid" id="lb-stats"></div>
-    </div>
-    <div class="card">
-      <h2>Topp 50</h2>
-      <table id="lb-table">
-        <thead>
-          <tr><th>#</th><th>Lag</th><th>Boks</th><th>Tid</th><th>Hint</th><th>Dato</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- VIEW: ADMIN -->
-  <section id="view-admin" class="hidden">
-    <div id="admin-login" class="card">
-      <h2>Admin Login</h2>
-      <label>Brukernavn</label>
-      <input id="admin-user" autocomplete="username" />
-      <label>Passord</label>
-      <input id="admin-pass" type="password" autocomplete="current-password" />
-      <button class="btn" onclick="adminLogin()">Logg inn</button>
-    </div>
-
-    <div id="admin-panel" class="hidden">
-      <div class="card">
-        <h2>Live Sesjoner</h2>
-        <div class="sessions-grid" id="admin-active-sessions">
-          <p style="color:var(--text-dim)">Ingen aktive sesjoner.</p>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Lag</h2>
-        <div class="row" style="margin-bottom:16px;">
-          <input id="new-team-name" placeholder="Lagnavn" />
-          <button class="btn" onclick="createTeam()" style="flex:0;">Opprett lag</button>
-        </div>
-        <table id="teams-table">
-          <thead><tr><th>Navn</th><th>Kode</th><th>Sesjoner</th><th>Fullført</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <h2>Historikk (siste 200)</h2>
-        <table id="history-table">
-          <thead><tr><th>Lag</th><th>Boks</th><th>Status</th><th>Tid</th><th>Hint</th><th>Startet</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <button class="btn secondary" onclick="adminLogout()">Logg ut</button>
-    </div>
-  </section>
+  <main id="main"></main>
 </div>
 
 <div id="toast" class="toast hidden"></div>
 
 <script>
   // ============================================================
-  //  KONFIG  ---  endre API_URL til din Railway-URL etter deploy
+  //  KONFIG
   // ============================================================
   const API_URL = window.location.hostname === 'localhost'
     ? 'http://localhost:3000'
@@ -388,13 +425,23 @@
   //  STATE
   // ============================================================
   let state = {
-    view: 'play',
+    user: null,
+    token: localStorage.getItem('eb_token'),
+    team: null,
     activeSession: null,
     timerInterval: null,
-    adminToken: localStorage.getItem('escapebox_admin_token'),
     ws: null,
     wsReconnectTimer: null,
+    currentView: 'login',
+    currentTab: null,
+    data: {}, // cache for views
   };
+
+  // Forsøk å hente bruker fra localStorage
+  try {
+    const cached = localStorage.getItem('eb_user');
+    if (cached) state.user = JSON.parse(cached);
+  } catch {}
 
   // ============================================================
   //  HELPERS
@@ -405,21 +452,25 @@
     const m = Math.floor(sec / 60), s = sec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
-  const toast = (msg, type = 'info') => {
+  const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+
+  function toast(msg, type = 'info') {
     const t = $('toast');
     t.textContent = msg;
     t.classList.remove('hidden');
     t.style.borderColor = type === 'error' ? 'var(--danger)' : 'var(--accent)';
     clearTimeout(t._timer);
-    t._timer = setTimeout(() => t.classList.add('hidden'), 3000);
-  };
+    t._timer = setTimeout(() => t.classList.add('hidden'), 3500);
+  }
 
   async function api(path, opts = {}) {
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-    if (state.adminToken && opts.admin) headers.Authorization = 'Bearer ' + state.adminToken;
+    if (state.token) headers.Authorization = 'Bearer ' + state.token;
     const res = await fetch(API_URL + path, { ...opts, headers });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'API-feil');
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
 
@@ -428,13 +479,8 @@
   // ============================================================
   function connectWS() {
     if (state.ws?.readyState === WebSocket.OPEN) return;
-    try {
-      state.ws = new WebSocket(WS_URL);
-    } catch (e) {
-      $('ws-dot').classList.add('error');
-      $('ws-status-text').textContent = 'Feil';
-      return;
-    }
+    try { state.ws = new WebSocket(WS_URL); } catch { return; }
+
     state.ws.onopen = () => {
       $('ws-dot').classList.add('connected');
       $('ws-dot').classList.remove('error');
@@ -446,9 +492,7 @@
       clearTimeout(state.wsReconnectTimer);
       state.wsReconnectTimer = setTimeout(connectWS, 3000);
     };
-    state.ws.onerror = () => {
-      $('ws-dot').classList.add('error');
-    };
+    state.ws.onerror = () => $('ws-dot').classList.add('error');
     state.ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
@@ -458,55 +502,254 @@
   }
 
   function handleWSMessage(msg) {
-    if (msg.type === 'session_started' || msg.type === 'session_event' || msg.type === 'session_finished') {
-      // Hvis admin er pålogget og ser admin-panel, oppdater
-      if (state.view === 'admin' && state.adminToken) {
-        loadAdminData();
+    // For nå: bare oppdater event-detaljer hvis vi ser på et event
+    if (state.currentView === 'event-detail' && state.data.eventId) {
+      if (['session_started', 'session_event', 'session_finished'].includes(msg.type)) {
+        loadEventDetail(state.data.eventId, true); // soft-refresh
       }
     }
   }
 
   // ============================================================
-  //  NAV
+  //  AUTH
   // ============================================================
-  document.querySelectorAll('.nav button').forEach(btn => {
-    btn.addEventListener('click', () => switchView(btn.dataset.view));
-  });
+  async function login(email, password) {
+    const res = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    state.token = res.token;
+    state.user = res.user;
+    localStorage.setItem('eb_token', res.token);
+    localStorage.setItem('eb_user', JSON.stringify(res.user));
+    return res;
+  }
 
-  function switchView(view) {
-    state.view = view;
-    document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-    ['play', 'leaderboard', 'admin'].forEach(v => $('view-' + v).classList.toggle('hidden', v !== view));
-    if (view === 'leaderboard') loadLeaderboard();
-    if (view === 'admin' && state.adminToken) {
-      $('admin-login').classList.add('hidden');
-      $('admin-panel').classList.remove('hidden');
-      loadAdminData();
+  function logout() {
+    state.token = null;
+    state.user = null;
+    state.team = null;
+    localStorage.removeItem('eb_token');
+    localStorage.removeItem('eb_user');
+    localStorage.removeItem('eb_team');
+    goHome();
+  }
+
+  function goHome() {
+    if (state.user) {
+      switch (state.user.role) {
+        case 'superadmin': return showSuperadmin();
+        case 'org_admin': return showOrgAdmin();
+        case 'gamemaster': return showOrgAdmin(); // foreløpig samme view
+        default: return showLogin();
+      }
     }
+    showLogin();
   }
 
   // ============================================================
-  //  PLAY
+  //  USER INFO HEADER
   // ============================================================
-  async function startGame() {
+  function renderUserInfo() {
+    const el = $('user-info');
+    if (!state.user) {
+      el.innerHTML = '';
+      return;
+    }
+    const roleLabel = {
+      superadmin: 'Superadmin',
+      org_admin: 'Bedriftsadmin',
+      gamemaster: 'GameMaster',
+    }[state.user.role] || state.user.role;
+    const orgPart = state.user.organization_name
+      ? ` · ${escapeHtml(state.user.organization_name)}`
+      : '';
+    el.innerHTML = `
+      <span><strong>${escapeHtml(state.user.name)}</strong> · ${roleLabel}${orgPart}</span>
+      <button class="btn small secondary" onclick="showAccount()">Min konto</button>
+      <button class="btn small secondary" onclick="logout()">Logg ut</button>
+    `;
+  }
+
+  // ============================================================
+  //  LOGIN VIEW
+  // ============================================================
+  function showLogin() {
+    state.currentView = 'login';
+    renderUserInfo();
+    $('main').innerHTML = `
+      <div class="login-container">
+        <div class="card">
+          <h2>Logg inn</h2>
+          <label>Epost</label>
+          <input id="login-email" type="email" autocomplete="email" />
+          <label>Passord</label>
+          <input id="login-password" type="password" autocomplete="current-password" />
+          <button class="btn" onclick="handleLogin()" style="width:100%">Logg inn</button>
+        </div>
+        <div style="text-align:center; margin-top:24px; color:var(--text-dim); font-size:12px;">
+          Er du deltager? <a href="#" onclick="showTeamLogin(); return false;" style="color:var(--accent-2)">Bli med i et lag</a>
+        </div>
+      </div>
+    `;
+    setTimeout(() => $('login-email')?.focus(), 100);
+    // Enter for å sende
+    ['login-email', 'login-password'].forEach(id => {
+      $(id)?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') handleLogin();
+      });
+    });
+  }
+
+  async function handleLogin() {
     try {
-      const code = $('play-code').value.trim().toUpperCase();
-      const box = $('play-box').value;
-      const limit = parseInt($('play-time-limit').value, 10) * 60;
-      if (!code) return toast('Skriv inn lagkode', 'error');
+      const email = $('login-email').value.trim();
+      const password = $('login-password').value;
+      if (!email || !password) return toast('Fyll inn epost og passord', 'error');
+      await login(email, password);
+      toast(`Velkommen, ${state.user.name}!`);
+      goHome();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  TEAM LOGIN VIEW (deltagere)
+  // ============================================================
+  function showTeamLogin() {
+    state.currentView = 'team-login';
+    renderUserInfo();
+
+    // Sjekk om vi har URL-parametre fra QR-kode (?event=ABC&team=XYZ)
+    const params = new URLSearchParams(window.location.search);
+    const eventCode = params.get('event') || '';
+    const teamCode = params.get('team') || '';
+
+    $('main').innerHTML = `
+      <div class="login-container">
+        <div class="card">
+          <h2>Bli med</h2>
+          <label>Eventkode</label>
+          <input id="tl-event" placeholder="ABCDE" value="${escapeHtml(eventCode)}"
+            style="text-transform:uppercase" maxlength="10" />
+          <label>Lagkode</label>
+          <input id="tl-team" placeholder="XYZ1" value="${escapeHtml(teamCode)}"
+            style="text-transform:uppercase" maxlength="10" />
+          <label>PIN (4 siffer)</label>
+          <input id="tl-pin" inputmode="numeric" maxlength="4" placeholder="••••" />
+          <button class="btn" onclick="handleTeamLogin()" style="width:100%">Bli med</button>
+        </div>
+        <div style="text-align:center; margin-top:24px; color:var(--text-dim); font-size:12px;">
+          <a href="#" onclick="showLogin(); return false;" style="color:var(--accent-2)">← Tilbake til vanlig login</a>
+        </div>
+      </div>
+    `;
+    setTimeout(() => {
+      const target = !eventCode ? 'tl-event' : !teamCode ? 'tl-team' : 'tl-pin';
+      $(target)?.focus();
+    }, 100);
+  }
+
+  async function handleTeamLogin() {
+    try {
+      const event_code = $('tl-event').value.trim().toUpperCase();
+      const team_code = $('tl-team').value.trim().toUpperCase();
+      const pin = $('tl-pin').value.trim();
+      if (!event_code || !team_code || !pin) return toast('Fyll inn alle feltene', 'error');
+
+      const res = await api('/api/auth/team-login', {
+        method: 'POST',
+        body: JSON.stringify({ event_code, team_code, pin }),
+      });
+      state.team = res.team;
+      localStorage.setItem('eb_team', JSON.stringify(res.team));
+      toast(`Velkommen, ${res.team.name}!`);
+      showTeamPlay();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  TEAM PLAY VIEW (deltagere)
+  // ============================================================
+  function showTeamPlay() {
+    state.currentView = 'team-play';
+    renderUserInfo();
+    const t = state.team;
+    $('main').innerHTML = `
+      <div class="card">
+        <h2 style="color:${escapeHtml(t.color)}">${escapeHtml(t.name)}</h2>
+        <p style="color:var(--text-dim); margin-bottom:16px;">
+          ${escapeHtml(t.event_name)} · ${escapeHtml(t.scenario_name || 'Ukjent scenario')}
+        </p>
+        <div id="team-play-content"></div>
+      </div>
+    `;
+    renderTeamPlayState();
+  }
+
+  async function renderTeamPlayState() {
+    const t = state.team;
+    const c = $('team-play-content');
+    if (!c) return;
+
+    // Sjekk om sesjon allerede pågår
+    try {
+      const session = await api(`/api/sessions/active/${t.id}`);
+      state.activeSession = session;
+      renderActiveGame();
+    } catch {
+      // Ingen aktiv sesjon — vis "Klar?"
+      if (t.event_status === 'live') {
+        c.innerHTML = `
+          <p style="margin-bottom:16px;">Eventet er i gang! Klikk start for å begynne.</p>
+          <button class="btn success" onclick="startTeamGame()">Start spill</button>
+        `;
+      } else if (t.event_status === 'finished') {
+        c.innerHTML = `<p>Eventet er avsluttet.</p>`;
+      } else {
+        c.innerHTML = `
+          <p>Vent på at GameMaster starter eventet.</p>
+          <p style="color:var(--text-dim); margin-top:8px; font-size:12px;">
+            Status: ${escapeHtml(t.event_status)}
+          </p>
+        `;
+      }
+    }
+  }
+
+  async function startTeamGame() {
+    try {
       const session = await api('/api/sessions/start', {
         method: 'POST',
-        body: JSON.stringify({ team_code: code, box_name: box, time_limit_seconds: limit })
+        body: JSON.stringify({ team_id: state.team.id }),
       });
       state.activeSession = session;
-      $('play-team-name').textContent = session.team_name;
-      $('play-start').classList.add('hidden');
-      $('play-active').classList.remove('hidden');
-      startTimer();
+      renderActiveGame();
       toast('Spill startet!');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function renderActiveGame() {
+    const c = $('team-play-content');
+    c.innerHTML = `
+      <div class="timer" id="play-timer">--:--</div>
+      <div class="row" style="margin-top: 16px;">
+        <button class="btn success" onclick="logTeamEvent('puzzle_solved')">Puzzle løst</button>
+        <button class="btn secondary" onclick="logTeamEvent('hint_used')">Bruk hint</button>
+        <button class="btn" onclick="finishTeamGame(true)">Fullført!</button>
+        <button class="btn danger" onclick="finishTeamGame(false)">Avbryt</button>
+      </div>
+      <div style="margin-top: 24px; display:flex; gap:24px; justify-content: center;">
+        <div class="stat" style="background:none; border:none;">
+          <div class="num" id="play-puzzle">${state.activeSession.current_puzzle || 0}</div>
+          <div class="label">Puzzle</div>
+        </div>
+        <div class="stat" style="background:none; border:none;">
+          <div class="num" id="play-hints">${state.activeSession.hints_used || 0}</div>
+          <div class="label">Hint brukt</div>
+        </div>
+      </div>
+    `;
+    startTimer();
   }
 
   function startTimer() {
@@ -517,208 +760,934 @@
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
       const remaining = Math.max(0, limit - elapsed);
       const el = $('play-timer');
+      if (!el) { clearInterval(state.timerInterval); return; }
       el.textContent = fmt(remaining);
       el.classList.toggle('warning', remaining <= 600 && remaining > 60);
       el.classList.toggle('danger', remaining <= 60);
       if (remaining === 0) {
         clearInterval(state.timerInterval);
-        finishGame(false);
+        finishTeamGame(false);
       }
     };
     tick();
     state.timerInterval = setInterval(tick, 1000);
   }
 
-  async function logEvent(type) {
+  async function logTeamEvent(type) {
     if (!state.activeSession) return;
     try {
       const res = await api(`/api/sessions/${state.activeSession.id}/event`, {
         method: 'POST',
-        body: JSON.stringify({
-          puzzle_index: state.activeSession.current_puzzle,
-          event_type: type
-        })
+        body: JSON.stringify({ puzzle_index: state.activeSession.current_puzzle, event_type: type }),
       });
       state.activeSession = res.session;
       $('play-puzzle').textContent = res.session.current_puzzle;
       $('play-hints').textContent = res.session.hints_used;
       toast(type === 'puzzle_solved' ? 'Puzzle løst!' : 'Hint brukt');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
+    } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function finishGame(completed) {
+  async function finishTeamGame(completed) {
     if (!state.activeSession) return;
     try {
       await api(`/api/sessions/${state.activeSession.id}/finish`, {
         method: 'POST',
-        body: JSON.stringify({ completed })
+        body: JSON.stringify({ completed }),
       });
       clearInterval(state.timerInterval);
       state.activeSession = null;
-      $('play-active').classList.add('hidden');
-      $('play-start').classList.remove('hidden');
+      $('team-play-content').innerHTML = completed
+        ? `<h2 style="color:var(--success)">🎉 Gratulerer!</h2><p>Dere fullførte spillet!</p>`
+        : `<p>Spill avsluttet.</p>`;
       toast(completed ? '🎉 Gratulerer!' : 'Spill avsluttet');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  }
-
-  // ============================================================
-  //  LEADERBOARD
-  // ============================================================
-  async function loadLeaderboard() {
-    try {
-      const [lb, stats] = await Promise.all([
-        api('/api/stats/leaderboard'),
-        api('/api/stats/stats')
-      ]);
-      const s = stats.overall;
-      $('lb-stats').innerHTML = `
-        <div class="stat"><div class="num">${s.total_sessions || 0}</div><div class="label">Total spill</div></div>
-        <div class="stat"><div class="num">${s.completed_sessions || 0}</div><div class="label">Fullførte</div></div>
-        <div class="stat"><div class="num">${s.active_sessions || 0}</div><div class="label">Aktive nå</div></div>
-        <div class="stat"><div class="num">${fmt(Math.round(s.avg_duration || 0))}</div><div class="label">Snitt tid</div></div>
-      `;
-      const tbody = $('lb-table').querySelector('tbody');
-      tbody.innerHTML = lb.map((r, i) => `
-        <tr>
-          <td>${i + 1}</td>
-          <td><strong>${r.team_name}</strong></td>
-          <td>${r.box_name}</td>
-          <td>${fmt(r.duration_seconds)}</td>
-          <td>${r.hints_used}</td>
-          <td>${new Date(r.finished_at).toLocaleDateString('nb-NO')}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="6" style="color:var(--text-dim)">Ingen resultater enda</td></tr>';
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  }
-
-  // ============================================================
-  //  ADMIN
-  // ============================================================
-  async function adminLogin() {
-    try {
-      const res = await api('/api/auth/admin/login', {
-        method: 'POST',
-        body: JSON.stringify({
-          username: $('admin-user').value,
-          password: $('admin-pass').value
-        })
-      });
-      state.adminToken = res.token;
-      localStorage.setItem('escapebox_admin_token', res.token);
-      $('admin-login').classList.add('hidden');
-      $('admin-panel').classList.remove('hidden');
-      loadAdminData();
-      toast('Innlogget');
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  }
-
-  function adminLogout() {
-    state.adminToken = null;
-    localStorage.removeItem('escapebox_admin_token');
-    $('admin-panel').classList.add('hidden');
-    $('admin-login').classList.remove('hidden');
-  }
-
-  async function loadAdminData() {
-    try {
-      const [active, teams, history] = await Promise.all([
-        api('/api/sessions/active', { admin: true }),
-        api('/api/teams', { admin: true }),
-        api('/api/sessions', { admin: true })
-      ]);
-      renderActiveSessions(active);
-      renderTeams(teams);
-      renderHistory(history);
-    } catch (e) {
-      if (e.message.includes('token')) adminLogout();
-      else toast(e.message, 'error');
-    }
-  }
-
-  function renderActiveSessions(sessions) {
-    const c = $('admin-active-sessions');
-    if (sessions.length === 0) {
-      c.innerHTML = '<p style="color:var(--text-dim)">Ingen aktive sesjoner.</p>';
-      return;
-    }
-    c.innerHTML = sessions.map(s => {
-      const elapsed = Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000);
-      const remaining = Math.max(0, s.time_limit_seconds - elapsed);
-      return `
-        <div class="session-card ${remaining < 600 ? 'urgent' : ''}">
-          <div class="team-name">${s.team_name}</div>
-          <div class="meta">${s.box_name} · kode ${s.team_code}</div>
-          <div class="session-timer">${fmt(remaining)}</div>
-          <div class="meta">Puzzle ${s.current_puzzle} · ${s.hints_used} hint</div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  function renderTeams(teams) {
-    const tbody = $('teams-table').querySelector('tbody');
-    tbody.innerHTML = teams.map(t => `
-      <tr>
-        <td><strong>${t.name}</strong></td>
-        <td><code style="color:var(--accent-2)">${t.code}</code></td>
-        <td>${t.sessions_count}</td>
-        <td>${t.completed_count}</td>
-        <td><button class="btn small danger" onclick="deleteTeam(${t.id}, '${t.name.replace(/'/g, "\\'")}')">Slett</button></td>
-      </tr>
-    `).join('') || '<tr><td colspan="5" style="color:var(--text-dim)">Ingen lag enda</td></tr>';
-  }
-
-  function renderHistory(sessions) {
-    const tbody = $('history-table').querySelector('tbody');
-    tbody.innerHTML = sessions.map(s => {
-      let badge = '<span class="badge active">Aktiv</span>';
-      if (s.status === 'finished') {
-        badge = s.completed
-          ? '<span class="badge completed">Fullført</span>'
-          : '<span class="badge failed">Avbrutt</span>';
-      }
-      return `
-        <tr>
-          <td><strong>${s.team_name}</strong></td>
-          <td>${s.box_name}</td>
-          <td>${badge}</td>
-          <td>${fmt(s.duration_seconds)}</td>
-          <td>${s.hints_used || 0}</td>
-          <td>${new Date(s.started_at).toLocaleString('nb-NO')}</td>
-        </tr>
-      `;
-    }).join('') || '<tr><td colspan="6" style="color:var(--text-dim)">Ingen historikk</td></tr>';
-  }
-
-  async function createTeam() {
-    try {
-      const name = $('new-team-name').value.trim();
-      if (!name) return toast('Skriv inn navn', 'error');
-      const team = await api('/api/teams', {
-        method: 'POST',
-        admin: true,
-        body: JSON.stringify({ name })
-      });
-      $('new-team-name').value = '';
-      toast(`Lag opprettet: kode ${team.code}`);
-      loadAdminData();
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function deleteTeam(id, name) {
-    if (!confirm(`Slett laget "${name}"? Dette sletter også alle sesjoner.`)) return;
+  // ============================================================
+  //  SUPERADMIN VIEW
+  // ============================================================
+  function showSuperadmin() {
+    state.currentView = 'superadmin';
+    renderUserInfo();
+    if (!state.currentTab) state.currentTab = 'orgs';
+    $('main').innerHTML = `
+      <div class="tabs">
+        <button data-tab="orgs" class="${state.currentTab === 'orgs' ? 'active' : ''}">Bedrifter</button>
+        <button data-tab="scenarios" class="${state.currentTab === 'scenarios' ? 'active' : ''}">Scenarier</button>
+        <button data-tab="users" class="${state.currentTab === 'users' ? 'active' : ''}">Brukere</button>
+      </div>
+      <div id="tab-content"></div>
+    `;
+    document.querySelectorAll('.tabs button').forEach(b => {
+      b.addEventListener('click', () => {
+        state.currentTab = b.dataset.tab;
+        showSuperadmin();
+      });
+    });
+    if (state.currentTab === 'orgs') renderOrgs();
+    if (state.currentTab === 'scenarios') renderScenarios();
+    if (state.currentTab === 'users') renderAllUsers();
+  }
+
+  async function renderOrgs() {
+    const c = $('tab-content');
+    c.innerHTML = `
+      <div class="card">
+        <h2>Opprett bedrift</h2>
+        <div class="row">
+          <div><label>Bedriftsnavn</label><input id="new-org-name" /></div>
+          <div><label>Admin-navn</label><input id="new-org-admin-name" /></div>
+          <div><label>Admin-epost</label><input id="new-org-admin-email" type="email" /></div>
+          <div><label>Admin-passord</label><input id="new-org-admin-password" type="password" /></div>
+          <div style="flex:0;"><button class="btn" onclick="createOrg()">Opprett</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Bedrifter</h2>
+        <table id="orgs-table">
+          <thead><tr><th>Navn</th><th>Slug</th><th>Brukere</th><th>Eventer</th><th>Opprettet</th><th></th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">Laster...</td></tr></tbody>
+        </table>
+      </div>
+    `;
     try {
-      await api('/api/teams/' + id, { method: 'DELETE', admin: true });
-      toast('Laget er slettet');
-      loadAdminData();
+      const orgs = await api('/api/organizations');
+      const tbody = $('orgs-table').querySelector('tbody');
+      if (orgs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Ingen bedrifter enda</td></tr>';
+      } else {
+        tbody.innerHTML = orgs.map(o => `
+          <tr>
+            <td><strong>${escapeHtml(o.name)}</strong></td>
+            <td><code style="color:var(--text-dim)">${escapeHtml(o.slug)}</code></td>
+            <td>${o.user_count}</td>
+            <td>${o.event_count}</td>
+            <td>${new Date(o.created_at).toLocaleDateString('nb-NO')}</td>
+            <td><button class="btn small danger" onclick="deleteOrg(${o.id}, '${escapeHtml(o.name).replace(/'/g, "\\'")}')">Slett</button></td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function createOrg() {
+    try {
+      const name = $('new-org-name').value.trim();
+      const admin_name = $('new-org-admin-name').value.trim();
+      const admin_email = $('new-org-admin-email').value.trim();
+      const admin_password = $('new-org-admin-password').value;
+      if (!name || !admin_name || !admin_email || !admin_password) {
+        return toast('Fyll inn alle feltene', 'error');
+      }
+      const res = await api('/api/organizations', {
+        method: 'POST',
+        body: JSON.stringify({ name, admin_name, admin_email, admin_password }),
+      });
+      toast(`Bedrift opprettet: ${res.organization.name}`);
+      ['new-org-name', 'new-org-admin-name', 'new-org-admin-email', 'new-org-admin-password']
+        .forEach(id => $(id).value = '');
+      renderOrgs();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function deleteOrg(id, name) {
+    if (!confirm(`Slett "${name}"? Dette sletter også alle brukere, eventer og lag i bedriften.`)) return;
+    try {
+      await api('/api/organizations/' + id, { method: 'DELETE' });
+      toast('Bedrift slettet');
+      renderOrgs();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function renderScenarios() {
+    const c = $('tab-content');
+    c.innerHTML = `
+      <div class="card">
+        <h2>Opprett scenario</h2>
+        <label>Navn</label>
+        <input id="new-sc-name" placeholder="f.eks. Heist" />
+        <label>Beskrivelse</label>
+        <textarea id="new-sc-desc"></textarea>
+        <label>Tidsgrense (minutter)</label>
+        <input id="new-sc-time" type="number" value="60" min="5" max="180" />
+        <button class="btn" onclick="createScenario()">Opprett scenario</button>
+      </div>
+      <div class="card">
+        <h2>Scenariobibliotek</h2>
+        <p style="color:var(--text-dim); font-size:12px; margin-bottom:12px;">Klikk på et scenario for å redigere koordinater og innstillinger.</p>
+        <table id="sc-table">
+          <thead><tr><th>Navn</th><th>Beskrivelse</th><th>Tid</th><th>Koord.</th><th>Status</th><th></th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">Laster...</td></tr></tbody>
+        </table>
+      </div>
+    `;
+    try {
+      const scenarios = await api('/api/scenarios?all=1');
+      const tbody = $('sc-table').querySelector('tbody');
+      if (scenarios.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Ingen scenarier enda</td></tr>';
+      } else {
+        tbody.innerHTML = scenarios.map(s => `
+          <tr style="cursor:pointer" onclick="openScenarioBuilder(${s.id})">
+            <td><strong>${escapeHtml(s.name)}</strong></td>
+            <td style="color:var(--text-dim)">${escapeHtml((s.description || '').slice(0, 80))}</td>
+            <td>${Math.round(s.time_limit_seconds / 60)} min</td>
+            <td>${s.coord_count || 0}</td>
+            <td>${s.active ? '<span class="badge status-live">Aktiv</span>' : '<span class="badge status-finished">Inaktiv</span>'}</td>
+            <td><button class="btn small danger" onclick="event.stopPropagation(); deleteScenario(${s.id})">Slett</button></td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function createScenario() {
+    try {
+      const name = $('new-sc-name').value.trim();
+      const description = $('new-sc-desc').value.trim();
+      const time_limit_seconds = (parseInt($('new-sc-time').value, 10) || 60) * 60;
+      if (!name) return toast('Navn påkrevd', 'error');
+      const sc = await api('/api/scenarios', {
+        method: 'POST',
+        body: JSON.stringify({ name, description, time_limit_seconds }),
+      });
+      toast('Scenario opprettet');
+      ['new-sc-name', 'new-sc-desc'].forEach(id => $(id).value = '');
+      openScenarioBuilder(sc.id);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function deleteScenario(id) {
+    if (!confirm('Slett scenario?')) return;
+    try {
+      const r = await api('/api/scenarios/' + id, { method: 'DELETE' });
+      toast(r.deactivated ? 'Scenario deaktivert (var i bruk)' : 'Scenario slettet');
+      renderScenarios();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  SCENARIO BUILDER (superadmin)
+  // ============================================================
+  async function openScenarioBuilder(id) {
+    state.currentView = 'scenario-builder';
+    state.data.scenarioId = id;
+    $('main').innerHTML = '<div class="card empty">Laster scenario...</div>';
+    try {
+      const sc = await api('/api/scenarios/' + id);
+      state.data.scenario = sc;
+      renderScenarioBuilder();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function renderScenarioBuilder() {
+    const sc = state.data.scenario;
+    const settings = sc.scenario_data.settings || {};
+    const coords = sc.scenario_data.coordinates || [];
+
+    $('main').innerHTML = `
+      <button class="btn small secondary" onclick="state.currentTab='scenarios'; showSuperadmin()" style="margin-bottom:16px;">← Tilbake til scenarier</button>
+
+      <div class="card">
+        <h2>${escapeHtml(sc.name)}</h2>
+        <div class="row">
+          <div><label>Navn</label><input id="sb-name" value="${escapeHtml(sc.name)}" /></div>
+          <div><label>Tidsgrense (min)</label><input id="sb-time" type="number" value="${Math.round(sc.time_limit_seconds/60)}" min="5" max="180" /></div>
+        </div>
+        <label>Beskrivelse</label>
+        <textarea id="sb-desc">${escapeHtml(sc.description || '')}</textarea>
+        <button class="btn" onclick="saveScenarioMeta()">Lagre grunninformasjon</button>
+      </div>
+
+      <div class="card">
+        <h2>Innstillinger</h2>
+        <div class="row" style="align-items:flex-start;">
+          <div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="sb-time-enabled" style="width:auto; margin:0;" ${settings.time_limit_enabled !== false ? 'checked' : ''} />
+              <span>Tidsgrense aktivert</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:8px;">
+              <input type="checkbox" id="sb-show-score" style="width:auto; margin:0;" ${settings.show_score !== false ? 'checked' : ''} />
+              <span>Vis poengscore til lagene</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:8px;">
+              <input type="checkbox" id="sb-penalty-enabled" style="width:auto; margin:0;" ${settings.penalty_enabled ? 'checked' : ''} onchange="togglePenaltyDetails()" />
+              <span>Straff for feil kode</span>
+            </label>
+          </div>
+          <div id="sb-penalty-details" style="${settings.penalty_enabled ? '' : 'display:none;'}">
+            <label>Straff per feil (poeng)</label>
+            <input type="number" id="sb-penalty-amount" value="${settings.penalty_amount || 1}" min="0" max="20" />
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="sb-penalty-escalation" style="width:auto; margin:0;" ${settings.penalty_escalation ? 'checked' : ''} onchange="toggleEscalationDetails()" />
+              <span>Eskalér ved mange feil</span>
+            </label>
+            <div id="sb-escalation-details" style="${settings.penalty_escalation ? '' : 'display:none;'}">
+              <div class="row">
+                <div><label>Etter X feil</label><input type="number" id="sb-escalation-after" value="${settings.penalty_escalation_after || 3}" min="1" /></div>
+                <div><label>Ny straff per feil</label><input type="number" id="sb-escalation-amount" value="${settings.penalty_escalation_amount || 2}" min="0" /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button class="btn" onclick="saveScenarioSettings()">Lagre innstillinger</button>
+      </div>
+
+      <div class="card">
+        <h2>Koordinater (${coords.length})</h2>
+        <p style="color:var(--text-dim); font-size:12px; margin-bottom:12px;">
+          Hver koordinat er et punkt på kartet (X, Y) som låses opp med en kode. Kortene under vises når riktig kode tastes inn.
+        </p>
+        <button class="btn" onclick="addCoordinate()" style="margin-bottom:16px;">+ Legg til koordinat</button>
+        <table id="sb-coords">
+          <thead><tr><th>X</th><th>Y</th><th>Kode</th><th>Type</th><th>Poeng</th><th>Kort</th><th></th></tr></thead>
+          <tbody>${coords.length === 0
+            ? '<tr><td colspan="7" class="empty">Ingen koordinater enda — klikk "Legg til koordinat".</td></tr>'
+            : coords.map((c, i) => `
+              <tr style="cursor:pointer" onclick="editCoordinate(${i})">
+                <td><strong>${c.x}</strong></td>
+                <td><strong>${c.y}</strong></td>
+                <td><code style="color:var(--accent-2)">${escapeHtml(String(c.code))}</code></td>
+                <td style="color:var(--text-dim); font-size:11px;">${c.code_is_text ? 'tekst' : 'tall'}</td>
+                <td>${c.points || 0}</td>
+                <td>${(c.cards || []).length}</td>
+                <td><button class="btn small danger" onclick="event.stopPropagation(); deleteCoordinate(${i})">Slett</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function togglePenaltyDetails() {
+    const el = $('sb-penalty-details');
+    if (el) el.style.display = $('sb-penalty-enabled').checked ? '' : 'none';
+  }
+  function toggleEscalationDetails() {
+    const el = $('sb-escalation-details');
+    if (el) el.style.display = $('sb-penalty-escalation').checked ? '' : 'none';
+  }
+
+  async function saveScenarioMeta() {
+    try {
+      const name = $('sb-name').value.trim();
+      const description = $('sb-desc').value;
+      const time_limit_seconds = (parseInt($('sb-time').value, 10) || 60) * 60;
+      if (!name) return toast('Navn påkrevd', 'error');
+      const sc = await api('/api/scenarios/' + state.data.scenarioId, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, description, time_limit_seconds }),
+      });
+      state.data.scenario.name = sc.name;
+      state.data.scenario.description = sc.description;
+      state.data.scenario.time_limit_seconds = sc.time_limit_seconds;
+      toast('Lagret');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function saveScenarioSettings() {
+    try {
+      const settings = {
+        time_limit_enabled: $('sb-time-enabled').checked,
+        show_score: $('sb-show-score').checked,
+        penalty_enabled: $('sb-penalty-enabled').checked,
+        penalty_amount: parseInt($('sb-penalty-amount').value, 10) || 1,
+        penalty_escalation: $('sb-penalty-escalation').checked,
+        penalty_escalation_after: parseInt($('sb-escalation-after').value, 10) || 3,
+        penalty_escalation_amount: parseInt($('sb-escalation-amount').value, 10) || 2,
+      };
+      state.data.scenario.scenario_data.settings = settings;
+      await saveScenarioData();
+      toast('Innstillinger lagret');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function saveScenarioData() {
+    const sc = state.data.scenario;
+    const updated = await api('/api/scenarios/' + sc.id, {
+      method: 'PATCH',
+      body: JSON.stringify({ scenario_data: sc.scenario_data }),
+    });
+    state.data.scenario = updated;
+    if (!Array.isArray(state.data.scenario.scenario_data.coordinates)) {
+      state.data.scenario.scenario_data.coordinates = [];
+    }
+    if (!state.data.scenario.scenario_data.settings) {
+      state.data.scenario.scenario_data.settings = {};
+    }
+  }
+
+  function addCoordinate() {
+    const sc = state.data.scenario;
+    sc.scenario_data.coordinates = sc.scenario_data.coordinates || [];
+    sc.scenario_data.coordinates.push({
+      x: 1, y: 1, code: '', code_is_text: true, points: 10, cards: [],
+    });
+    state.data.editingCoordIndex = sc.scenario_data.coordinates.length - 1;
+    showCoordinateEditor();
+  }
+
+  function editCoordinate(index) {
+    state.data.editingCoordIndex = index;
+    showCoordinateEditor();
+  }
+
+  async function deleteCoordinate(index) {
+    if (!confirm('Slett denne koordinaten?')) return;
+    try {
+      state.data.scenario.scenario_data.coordinates.splice(index, 1);
+      await saveScenarioData();
+      toast('Koordinat slettet');
+      renderScenarioBuilder();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function showCoordinateEditor() {
+    const sc = state.data.scenario;
+    const coord = sc.scenario_data.coordinates[state.data.editingCoordIndex];
+
+    const cardsHtml = (coord.cards || []).map((card, i) => `
+      <div class="team-card" style="border-left-color:${cardTypeColor(card.type)}">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <strong>${escapeHtml(card.title || '(uten tittel)')}</strong>
+          <span class="badge" style="background:${cardTypeColor(card.type)}33; color:${cardTypeColor(card.type)}">${card.type || 'info'}</span>
+        </div>
+        <div style="color:var(--text-dim); font-size:13px; white-space:pre-wrap; max-height:80px; overflow:hidden;">${escapeHtml((card.text || '').slice(0,200))}</div>
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button class="btn small secondary" onclick="editCard(${i})">Rediger</button>
+          <button class="btn small danger" onclick="deleteCard(${i})">Slett</button>
+        </div>
+      </div>
+    `).join('') || '<p class="empty">Ingen kort enda — klikk "Legg til kort".</p>';
+
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="coord-editor-bg" onclick="if(event.target.id==='coord-editor-bg') closeCoordEditor()">
+        <div class="modal" style="max-width:800px;">
+          <button class="modal-close" onclick="closeCoordEditor()">×</button>
+          <h2 style="font-family: 'Major Mono Display', monospace; font-size: 18px; letter-spacing: 3px; margin-bottom: 24px; color: var(--accent-2);">Rediger koordinat</h2>
+          <div class="row">
+            <div><label>X</label><input type="number" id="ce-x" value="${coord.x}" /></div>
+            <div><label>Y</label><input type="number" id="ce-y" value="${coord.y}" /></div>
+            <div><label>Poeng</label><input type="number" id="ce-points" value="${coord.points || 0}" min="0" /></div>
+          </div>
+          <div class="row">
+            <div style="flex:2;">
+              <label>Kode</label>
+              <input id="ce-code" value="${escapeHtml(String(coord.code || ''))}" placeholder="Eks: 4711 eller START" />
+            </div>
+            <div style="flex:1;">
+              <label>Kode-type</label>
+              <select id="ce-code-type">
+                <option value="text" ${coord.code_is_text ? 'selected' : ''}>Tekst</option>
+                <option value="number" ${!coord.code_is_text ? 'selected' : ''}>Tall</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn" onclick="saveCoordMeta()" style="margin-bottom:24px;">Lagre koordinat-info</button>
+
+          <h3 style="margin-top:24px;">Kort (vises når koden tastes riktig)</h3>
+          <button class="btn" onclick="addCard()" style="margin-bottom:16px;">+ Legg til kort</button>
+          <div id="ce-cards">${cardsHtml}</div>
+        </div>
+      </div>
+    `);
+  }
+
+  function closeCoordEditor() {
+    document.getElementById('coord-editor-bg')?.remove();
+    document.getElementById('card-editor-bg')?.remove();
+    renderScenarioBuilder();
+  }
+
+  function cardTypeColor(type) {
+    return {
+      info: '#4dabf7',
+      ledetraad: '#ffd43b',
+      fakta: '#51cf66',
+      advarsel: '#ff922b',
+      oppgave: '#cc5de8',
+    }[type] || '#8a98a8';
+  }
+
+  async function saveCoordMeta() {
+    try {
+      const coord = state.data.scenario.scenario_data.coordinates[state.data.editingCoordIndex];
+      const x = parseInt($('ce-x').value, 10);
+      const y = parseInt($('ce-y').value, 10);
+      const pointsVal = parseInt($('ce-points').value, 10);
+      const code = $('ce-code').value.trim();
+      const code_is_text = $('ce-code-type').value === 'text';
+      if (isNaN(x) || isNaN(y)) return toast('X og Y må være tall', 'error');
+      if (!code) return toast('Kode påkrevd', 'error');
+      coord.x = x;
+      coord.y = y;
+      coord.points = isNaN(pointsVal) ? 0 : pointsVal;
+      coord.code = code_is_text ? code : (parseInt(code, 10) || code);
+      coord.code_is_text = code_is_text;
+      await saveScenarioData();
+      toast('Koordinat lagret');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function addCard() {
+    const coord = state.data.scenario.scenario_data.coordinates[state.data.editingCoordIndex];
+    coord.cards = coord.cards || [];
+    coord.cards.push({ title: '', type: 'info', text: '' });
+    state.data.editingCardIndex = coord.cards.length - 1;
+    showCardEditor();
+  }
+
+  function editCard(index) {
+    state.data.editingCardIndex = index;
+    showCardEditor();
+  }
+
+  async function deleteCard(index) {
+    if (!confirm('Slett kortet?')) return;
+    try {
+      const coord = state.data.scenario.scenario_data.coordinates[state.data.editingCoordIndex];
+      coord.cards.splice(index, 1);
+      await saveScenarioData();
+      toast('Kort slettet');
+      // Re-render coord editor
+      document.getElementById('coord-editor-bg')?.remove();
+      showCoordinateEditor();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function showCardEditor() {
+    const coord = state.data.scenario.scenario_data.coordinates[state.data.editingCoordIndex];
+    const card = coord.cards[state.data.editingCardIndex];
+
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-bg" id="card-editor-bg" style="z-index:300;" onclick="if(event.target.id==='card-editor-bg') closeCardEditor()">
+        <div class="modal" style="max-width:600px;">
+          <button class="modal-close" onclick="closeCardEditor()">×</button>
+          <h2 style="font-family: 'Major Mono Display', monospace; font-size: 18px; letter-spacing: 3px; margin-bottom: 24px; color: var(--accent-2);">Rediger kort</h2>
+          <label>Tittel</label>
+          <input id="card-title" value="${escapeHtml(card.title || '')}" placeholder="f.eks. Ledetråd 1" />
+          <label>Type</label>
+          <select id="card-type">
+            <option value="info" ${card.type === 'info' ? 'selected' : ''}>Info (blå)</option>
+            <option value="ledetraad" ${card.type === 'ledetraad' ? 'selected' : ''}>Ledetråd (gul)</option>
+            <option value="fakta" ${card.type === 'fakta' ? 'selected' : ''}>Fakta (grønn)</option>
+            <option value="advarsel" ${card.type === 'advarsel' ? 'selected' : ''}>Advarsel (oransje)</option>
+            <option value="oppgave" ${card.type === 'oppgave' ? 'selected' : ''}>Oppgave (lilla)</option>
+          </select>
+          <label>Tekst (linjeskift bevares)</label>
+          <textarea id="card-text" style="min-height:160px;">${escapeHtml(card.text || '')}</textarea>
+          <button class="btn" onclick="saveCard()">Lagre kort</button>
+        </div>
+      </div>
+    `);
+    setTimeout(() => $('card-title')?.focus(), 100);
+  }
+
+  function closeCardEditor() {
+    document.getElementById('card-editor-bg')?.remove();
+    // Re-render coord editor med oppdaterte kort
+    document.getElementById('coord-editor-bg')?.remove();
+    showCoordinateEditor();
+  }
+
+  async function saveCard() {
+    try {
+      const coord = state.data.scenario.scenario_data.coordinates[state.data.editingCoordIndex];
+      const card = coord.cards[state.data.editingCardIndex];
+      card.title = $('card-title').value.trim();
+      card.type = $('card-type').value;
+      card.text = $('card-text').value;
+      await saveScenarioData();
+      toast('Kort lagret');
+      closeCardEditor();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+
+  async function renderAllUsers() {
+    const c = $('tab-content');
+    c.innerHTML = `
+      <div class="card">
+        <h2>Alle brukere på plattformen</h2>
+        <table id="users-table">
+          <thead><tr><th>Navn</th><th>Epost</th><th>Rolle</th><th>Bedrift</th><th>Status</th><th></th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">Laster...</td></tr></tbody>
+        </table>
+      </div>
+    `;
+    try {
+      const users = await api('/api/users');
+      const tbody = $('users-table').querySelector('tbody');
+      if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Ingen brukere</td></tr>';
+      } else {
+        tbody.innerHTML = users.map(u => `
+          <tr>
+            <td><strong>${escapeHtml(u.name)}</strong></td>
+            <td>${escapeHtml(u.email)}</td>
+            <td><span class="badge role-${u.role}">${u.role}</span></td>
+            <td>${escapeHtml(u.organization_name || '—')}</td>
+            <td>${u.active ? '✓' : '✗'}</td>
+            <td>
+              ${u.id !== state.user.id ? `<button class="btn small danger" onclick="deleteUser(${u.id})">Slett</button>` : ''}
+            </td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function deleteUser(id) {
+    if (!confirm('Slett bruker?')) return;
+    try {
+      await api('/api/users/' + id, { method: 'DELETE' });
+      toast('Bruker slettet');
+      renderAllUsers();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  ORG ADMIN VIEW
+  // ============================================================
+  function showOrgAdmin() {
+    state.currentView = 'org-admin';
+    renderUserInfo();
+    if (!state.currentTab) state.currentTab = 'events';
+    $('main').innerHTML = `
+      <div class="tabs">
+        <button data-tab="events" class="${state.currentTab === 'events' ? 'active' : ''}">Eventer</button>
+        ${state.user.role === 'org_admin' ? `<button data-tab="users" class="${state.currentTab === 'users' ? 'active' : ''}">Brukere</button>` : ''}
+      </div>
+      <div id="tab-content"></div>
+    `;
+    document.querySelectorAll('.tabs button').forEach(b => {
+      b.addEventListener('click', () => {
+        state.currentTab = b.dataset.tab;
+        showOrgAdmin();
+      });
+    });
+    if (state.currentTab === 'events') renderEvents();
+    if (state.currentTab === 'users') renderOrgUsers();
+  }
+
+  async function renderEvents() {
+    const c = $('tab-content');
+    c.innerHTML = `
+      <div class="card">
+        <h2>Opprett event</h2>
+        <div class="row">
+          <div><label>Navn</label><input id="new-ev-name" placeholder="f.eks. Bedrifts-event 2026" /></div>
+          <div>
+            <label>Scenario</label>
+            <select id="new-ev-scenario"><option>Laster...</option></select>
+          </div>
+          <div><label>Antall lag</label><input id="new-ev-teams" type="number" value="4" min="1" max="50" /></div>
+          <div><label>Dato (valgfri)</label><input id="new-ev-date" type="datetime-local" /></div>
+          <div style="flex:0;"><button class="btn" onclick="createNewEvent()">Opprett</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Eventer</h2>
+        <table id="events-table">
+          <thead><tr><th>Navn</th><th>Kode</th><th>Scenario</th><th>Lag</th><th>Status</th><th></th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">Laster...</td></tr></tbody>
+        </table>
+      </div>
+    `;
+    try {
+      const [scenarios, events] = await Promise.all([
+        api('/api/scenarios'),
+        api('/api/events'),
+      ]);
+      const sel = $('new-ev-scenario');
+      sel.innerHTML = scenarios.length
+        ? scenarios.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">Ingen scenarier tilgjengelig</option>';
+
+      const tbody = $('events-table').querySelector('tbody');
+      if (events.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Ingen eventer enda</td></tr>';
+      } else {
+        tbody.innerHTML = events.map(e => `
+          <tr style="cursor:pointer" onclick="loadEventDetail(${e.id})">
+            <td><strong>${escapeHtml(e.name)}</strong></td>
+            <td><code style="color:var(--accent-2)">${escapeHtml(e.code)}</code></td>
+            <td>${escapeHtml(e.scenario_name || '—')}</td>
+            <td>${e.team_count}</td>
+            <td><span class="badge status-${e.status}">${e.status}</span></td>
+            <td><button class="btn small" onclick="event.stopPropagation(); loadEventDetail(${e.id})">Åpne</button></td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function createNewEvent() {
+    try {
+      const name = $('new-ev-name').value.trim();
+      const scenario_id = parseInt($('new-ev-scenario').value, 10);
+      const team_count = parseInt($('new-ev-teams').value, 10);
+      const scheduled_at = $('new-ev-date').value || null;
+      if (!name || !scenario_id || !team_count) return toast('Fyll inn alle påkrevde felt', 'error');
+      const ev = await api('/api/events', {
+        method: 'POST',
+        body: JSON.stringify({ name, scenario_id, team_count, scheduled_at }),
+      });
+      toast(`Event opprettet: kode ${ev.code}`);
+      $('new-ev-name').value = '';
+      loadEventDetail(ev.id);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  EVENT DETAIL VIEW
+  // ============================================================
+  async function loadEventDetail(eventId, soft = false) {
+    state.currentView = 'event-detail';
+    state.data.eventId = eventId;
+    if (!soft) {
+      $('main').innerHTML = '<div class="card empty">Laster event...</div>';
+    }
+    try {
+      const ev = await api('/api/events/' + eventId);
+      renderEventDetail(ev);
+      // Subscribe via WebSocket
+      if (state.ws?.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: 'subscribe', event_id: eventId }));
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function renderEventDetail(ev) {
+    const baseUrl = window.location.origin + window.location.pathname;
+    const teamsHtml = ev.teams.map(t => {
+      const teamUrl = `${baseUrl}?event=${ev.code}&team=${t.code}`;
+      return `
+        <div class="team-card" style="border-left-color:${escapeHtml(t.color)}">
+          <div class="team-name">${escapeHtml(t.name)}</div>
+          <div class="team-meta">Status: ${t.session_status ? `<span class="badge status-${t.session_status}">${t.session_status}</span>` : '<span class="badge status-planned">venter</span>'}</div>
+          <div class="team-code">${escapeHtml(t.code)}</div>
+          <div class="team-pin">PIN: ${escapeHtml(t.pin)}</div>
+          <div id="qr-${t.id}" class="qr-code"></div>
+          <button class="btn small secondary" onclick="regeneratePin(${ev.id}, ${t.id})">Ny PIN</button>
+        </div>
+      `;
+    }).join('');
+
+    $('main').innerHTML = `
+      <button class="btn small secondary" onclick="state.currentTab='events'; showOrgAdmin()" style="margin-bottom:16px;">← Tilbake</button>
+      <div class="card">
+        <h2>${escapeHtml(ev.name)}</h2>
+        <p style="color:var(--text-dim); margin-bottom:8px;">
+          ${escapeHtml(ev.scenario_name || '—')} · ${ev.teams.length} lag · <span class="badge status-${ev.status}">${ev.status}</span>
+        </p>
+        <p style="color:var(--text-dim); font-size:12px;">
+          Eventkode: <strong style="color:var(--accent-2); font-size:18px; letter-spacing:3px;">${escapeHtml(ev.code)}</strong>
+        </p>
+        <div class="row" style="margin-top:16px;">
+          ${ev.status === 'planned' ? `<button class="btn success" onclick="updateEventStatus(${ev.id}, 'live')">Start eventet</button>` : ''}
+          ${ev.status === 'live' ? `<button class="btn" onclick="updateEventStatus(${ev.id}, 'finished')">Avslutt eventet</button>` : ''}
+          ${ev.status === 'finished' ? `<button class="btn secondary" onclick="updateEventStatus(${ev.id}, 'planned')">Sett tilbake til planlagt</button>` : ''}
+          <button class="btn danger small" onclick="deleteEvent(${ev.id})">Slett event</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Lag og QR-koder</h2>
+        <p style="color:var(--text-dim); font-size:12px; margin-bottom:16px;">
+          Skriv ut eller vis QR-koden til hvert lag. PIN må deles separat (det er sikkerheten).
+        </p>
+        <div class="team-grid">${teamsHtml}</div>
+      </div>
+    `;
+
+    // Generer QR-koder
+    ev.teams.forEach(t => {
+      const teamUrl = `${baseUrl}?event=${ev.code}&team=${t.code}`;
+      const el = document.getElementById('qr-' + t.id);
+      if (el) {
+        el.innerHTML = '';
+        new QRCode(el, { text: teamUrl, width: 140, height: 140 });
+      }
+    });
+  }
+
+  async function updateEventStatus(id, status) {
+    try {
+      await api('/api/events/' + id, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      toast('Status oppdatert');
+      loadEventDetail(id);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function deleteEvent(id) {
+    if (!confirm('Slett event? Alle lag og resultater forsvinner.')) return;
+    try {
+      await api('/api/events/' + id, { method: 'DELETE' });
+      toast('Event slettet');
+      state.currentTab = 'events';
+      showOrgAdmin();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function regeneratePin(eventId, teamId) {
+    if (!confirm('Generer ny PIN for laget?')) return;
+    try {
+      await api(`/api/events/${eventId}/teams/${teamId}/regenerate-pin`, { method: 'POST' });
+      toast('Ny PIN generert');
+      loadEventDetail(eventId);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function renderOrgUsers() {
+    const c = $('tab-content');
+    c.innerHTML = `
+      <div class="card">
+        <h2>Opprett bruker</h2>
+        <div class="row">
+          <div><label>Navn</label><input id="new-u-name" /></div>
+          <div><label>Epost</label><input id="new-u-email" type="email" /></div>
+          <div><label>Passord</label><input id="new-u-password" type="password" /></div>
+          <div>
+            <label>Rolle</label>
+            <select id="new-u-role">
+              <option value="gamemaster">GameMaster</option>
+              <option value="org_admin">Bedriftsadmin</option>
+            </select>
+          </div>
+          <div style="flex:0;"><button class="btn" onclick="createOrgUser()">Opprett</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Brukere i bedriften</h2>
+        <table id="org-users-table">
+          <thead><tr><th>Navn</th><th>Epost</th><th>Rolle</th><th>Status</th><th></th></tr></thead>
+          <tbody><tr><td colspan="5" class="empty">Laster...</td></tr></tbody>
+        </table>
+      </div>
+    `;
+    try {
+      const users = await api('/api/users');
+      const tbody = $('org-users-table').querySelector('tbody');
+      if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">Ingen brukere</td></tr>';
+      } else {
+        tbody.innerHTML = users.map(u => `
+          <tr>
+            <td><strong>${escapeHtml(u.name)}</strong></td>
+            <td>${escapeHtml(u.email)}</td>
+            <td><span class="badge role-${u.role}">${u.role}</span></td>
+            <td>${u.active ? '✓' : '✗'}</td>
+            <td>${u.id !== state.user.id ? `<button class="btn small danger" onclick="deleteUser(${u.id}); renderOrgUsers()">Slett</button>` : ''}</td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function createOrgUser() {
+    try {
+      const name = $('new-u-name').value.trim();
+      const email = $('new-u-email').value.trim();
+      const password = $('new-u-password').value;
+      const role = $('new-u-role').value;
+      if (!name || !email || !password) return toast('Fyll inn alle felt', 'error');
+      await api('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({ name, email, password, role }),
+      });
+      toast('Bruker opprettet');
+      ['new-u-name', 'new-u-email', 'new-u-password'].forEach(id => $(id).value = '');
+      renderOrgUsers();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  // ============================================================
+  //  ACCOUNT VIEW (alle innloggede brukere)
+  // ============================================================
+  function showAccount() {
+    state.currentView = 'account';
+    state.previousView = state.currentView;
+    renderUserInfo();
+    const u = state.user;
+    $('main').innerHTML = `
+      <button class="btn small secondary" onclick="goHome()" style="margin-bottom:16px;">← Tilbake</button>
+      <div class="card" style="max-width: 600px;">
+        <h2>Min profil</h2>
+        <label>Navn</label>
+        <input id="acc-name" value="${escapeHtml(u.name)}" />
+        <label>Epost</label>
+        <input id="acc-email" type="email" value="${escapeHtml(u.email)}" />
+        <button class="btn" onclick="saveProfile()">Lagre profil</button>
+      </div>
+
+      <div class="card" style="max-width: 600px;">
+        <h2>Bytt passord</h2>
+        <label>Nåværende passord</label>
+        <input id="acc-current-pw" type="password" autocomplete="current-password" />
+        <label>Nytt passord (minst 6 tegn)</label>
+        <input id="acc-new-pw" type="password" autocomplete="new-password" />
+        <label>Bekreft nytt passord</label>
+        <input id="acc-confirm-pw" type="password" autocomplete="new-password" />
+        <button class="btn" onclick="changePassword()">Bytt passord</button>
+      </div>
+
+      <div class="card" style="max-width: 600px;">
+        <h3>Om kontoen</h3>
+        <p style="color:var(--text-dim); font-size:13px; line-height:1.6;">
+          Rolle: <strong>${escapeHtml(state.user.role)}</strong><br>
+          ${state.user.organization_name ? `Bedrift: <strong>${escapeHtml(state.user.organization_name)}</strong><br>` : ''}
+          Bruker-ID: ${state.user.id}
+        </p>
+      </div>
+    `;
+  }
+
+  async function saveProfile() {
+    try {
+      const name = $('acc-name').value.trim();
+      const email = $('acc-email').value.trim();
+      if (!name || !email) return toast('Navn og epost påkrevd', 'error');
+
+      const res = await api('/api/auth/update-profile', {
+        method: 'POST',
+        body: JSON.stringify({ name, email }),
+      });
+
+      // Oppdater lokal state og token
+      state.token = res.token;
+      state.user = res.user;
+      localStorage.setItem('eb_token', res.token);
+      localStorage.setItem('eb_user', JSON.stringify(res.user));
+
+      toast('Profil oppdatert');
+      renderUserInfo();
+      showAccount(); // re-render med nye verdier
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function changePassword() {
+    try {
+      const current = $('acc-current-pw').value;
+      const newPw = $('acc-new-pw').value;
+      const confirm = $('acc-confirm-pw').value;
+
+      if (!current || !newPw) return toast('Fyll inn passord', 'error');
+      if (newPw.length < 6) return toast('Nytt passord må være minst 6 tegn', 'error');
+      if (newPw !== confirm) return toast('Passordene matcher ikke', 'error');
+
+      await api('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: current, new_password: newPw }),
+      });
+
+      // Tøm feltene
+      ['acc-current-pw', 'acc-new-pw', 'acc-confirm-pw'].forEach(id => $(id).value = '');
+      toast('Passord byttet');
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -726,14 +1695,26 @@
   //  INIT
   // ============================================================
   connectWS();
-  // Oppdater admin live-panel hvert 5. sek mens du ser det
-  setInterval(() => {
-    if (state.view === 'admin' && state.adminToken && !$('admin-panel').classList.contains('hidden')) {
-      api('/api/sessions/active', { admin: true })
-        .then(renderActiveSessions)
-        .catch(() => {});
+
+  // Sjekk URL-parametre — hvis ?event= eller ?team= → team-login
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('event') || urlParams.has('team')) {
+    showTeamLogin();
+  } else {
+    // Sjekk om vi har lagret team-sesjon
+    try {
+      const cachedTeam = localStorage.getItem('eb_team');
+      if (cachedTeam) state.team = JSON.parse(cachedTeam);
+    } catch {}
+
+    if (state.team) {
+      showTeamPlay();
+    } else if (state.user) {
+      goHome();
+    } else {
+      showLogin();
     }
-  }, 5000);
+  }
 </script>
 
 </body>

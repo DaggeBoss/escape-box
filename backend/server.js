@@ -7,14 +7,16 @@ const { WebSocketServer } = require('ws');
 
 const { initDatabase } = require('./db');
 const authRoutes = require('./routes/auth');
-const teamsRoutes = require('./routes/teams');
-const sessionsRoutes = require('./routes/sessions');
-const statsRoutes = require('./routes/stats');
+const orgRoutes = require('./routes/organizations');
+const userRoutes = require('./routes/users');
+const scenarioRoutes = require('./routes/scenarios');
+const eventRoutes = require('./routes/events');
+const sessionRoutes = require('./routes/sessions');
 
 const app = express();
 const server = http.createServer(app);
 
-// CORS - tillat frontend-domene (sett FRONTEND_URL i Railway)
+// CORS
 const allowedOrigins = (process.env.FRONTEND_URL || '*').split(',').map(s => s.trim());
 app.use(cors({
   origin: (origin, cb) => {
@@ -30,30 +32,36 @@ app.use(express.json({ limit: '5mb' }));
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'escape-box-backend', version: '1.0.0' });
+  res.json({ status: 'ok', service: 'escape-box-backend', version: '2.0.0' });
 });
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/teams', teamsRoutes);
-app.use('/api/sessions', sessionsRoutes);
-app.use('/api/stats', statsRoutes);
+app.use('/api/organizations', orgRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/scenarios', scenarioRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/sessions', sessionRoutes);
 
-// WebSocket setup
+// WebSocket
 const wss = new WebSocketServer({ server, path: '/ws' });
 const clients = new Set();
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
   clients.add(ws);
   console.log(`🔌 WS tilkoblet (totalt: ${clients.size})`);
 
   ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg.toString());
-      // Klient kan sende ping/pong, eller subscribe til specific session
       if (data.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      // Subscribe til event-id (for room-based broadcasting)
+      if (data.type === 'subscribe' && data.event_id) {
+        ws.subscribed_event = data.event_id;
+        ws.send(JSON.stringify({ type: 'subscribed', event_id: data.event_id }));
       }
     } catch (e) {
       console.error('WS message parse error:', e.message);
@@ -73,29 +81,30 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'welcome', timestamp: Date.now() }));
 });
 
-// Broadcast til alle tilkoblede klienter
+// Broadcast: send til alle, ELLER kun til de som er subscribed til en gitt event
 function broadcast(payload) {
   const json = JSON.stringify(payload);
+  const targetEventId = payload.event_id;
   clients.forEach((ws) => {
-    if (ws.readyState === ws.OPEN) {
-      ws.send(json);
+    if (ws.readyState !== ws.OPEN) return;
+    // Hvis broadcast har event_id, send kun til de som har subscribed til den
+    if (targetEventId && ws.subscribed_event && ws.subscribed_event !== targetEventId) {
+      return;
     }
+    ws.send(json);
   });
 }
 app.set('broadcast', broadcast);
 
-// Heartbeat - drep døde forbindelser (Railway terminerer idle WS)
+// Heartbeat
 setInterval(() => {
   clients.forEach((ws) => {
-    if (ws.readyState === ws.OPEN) {
-      ws.ping();
-    }
+    if (ws.readyState === ws.OPEN) ws.ping();
   });
 }, 30000);
 
 // Start
 const PORT = process.env.PORT || 3000;
-
 initDatabase()
   .then(() => {
     server.listen(PORT, () => {

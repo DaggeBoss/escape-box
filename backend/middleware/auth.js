@@ -14,17 +14,44 @@ function verifyToken(token) {
   }
 }
 
-function requireAdmin(req, res, next) {
+// Generell auth — krever gyldig token uansett rolle
+function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Mangler token' });
   }
   const decoded = verifyToken(auth.slice(7));
-  if (!decoded || decoded.role !== 'admin') {
+  if (!decoded) {
     return res.status(401).json({ error: 'Ugyldig token' });
   }
-  req.admin = decoded;
+  req.user = decoded;
   next();
 }
 
-module.exports = { signToken, verifyToken, requireAdmin };
+// Krever en spesifikk rolle (eller en av flere)
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    requireAuth(req, res, (err) => {
+      if (err) return;
+      if (!allowedRoles.includes(req.user.role)) {
+        return res.status(403).json({ error: 'Ikke tilgang' });
+      }
+      next();
+    });
+  };
+}
+
+// Hjelper: sjekker at brukerens organization_id matcher en gitt org
+// (superadmin kan se alt)
+function canAccessOrg(user, orgId) {
+  if (user.role === 'superadmin') return true;
+  return user.organization_id === orgId;
+}
+
+module.exports = {
+  signToken,
+  verifyToken,
+  requireAuth,
+  requireRole,
+  canAccessOrg,
+};

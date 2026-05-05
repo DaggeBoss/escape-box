@@ -1,7 +1,7 @@
 {
   "name": "escape-box-backend",
-  "version": "1.0.0",
-  "description": "Backend for Escape Box spill - Express + PostgreSQL + WebSocket",
+  "version": "2.0.0",
+  "description": "Backend for Escape Box plattform - Express + PostgreSQL + WebSocket",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
