@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Escape Box — Admin Portal</title>
 <link rel="stylesheet" href="styles.css">
-<script src="https://cdn.jsdelivr.net/npm/[email protected]/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -102,11 +102,12 @@
 <!-- ─── TOAST ─── -->
 <div id="toast-container"></div>
 
-<!-- App config — endre API_BASE etter deploy -->
+<!-- App config -->
 <script>
 window.APP_CONFIG = {
-  API_BASE: 'https://escape-box-backend-production.up.railway.app',
-  WS_URL:   'wss://escape-box-backend-production.up.railway.app/ws'
+  API_BASE: 'https://escape-box-production.up.railway.app',
+  WS_URL:   'wss://escape-box-production.up.railway.app/ws',
+  PARTICIPANT_URL: 'https://escape-box.netlify.app'
 };
 </script>
 <script src="app.js"></script>
