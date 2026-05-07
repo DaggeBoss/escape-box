@@ -1843,21 +1843,22 @@ function renderBoard() {
     svg += `</g>`;
   });
 
-  // ANKER-MARKØRER PÅ BOARD (over kort, alltid synlige)
-  // Disse er beregnet fra kort-plasseringen og overlay-cellen
-  const anchors = getBoardAnchors();
-  anchors.forEach(a => {
-    const ax = a.x * cs + cs / 2;
-    const ay = a.y * cs + cs / 2;
-    // Anker-symbol i lite (ca 0.55 av cellestørrelsen)
-    svg += renderAnchorSvg(ax, ay, cs * 0.55, '#b83228');
-    // Bokstav-label i hjørnet av anker-cellen
-    const labelR = cs * 0.18;
-    const lx = a.x * cs + cs - labelR - 2;
-    const ly = a.y * cs + labelR + 2;
-    svg += `<circle cx="${lx}" cy="${ly}" r="${labelR}" fill="#b83228" stroke="#fff" stroke-width="1.5" pointer-events="none"/>`;
-    svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${labelR * 1.3}" font-weight="700" fill="#fff" pointer-events="none">${escapeHtml(a.label)}</text>`;
-  });
+  // ANKER-MARKØRER PÅ BOARD med bokstav-labels.
+  // Vises kun når "Skjul kort" er på — ellers er ankrene allerede tegnet
+  // som del av kortet i renderTemplateOnBoard().
+  if (boardState.hideCards) {
+    const anchors = getBoardAnchors();
+    anchors.forEach(a => {
+      const ax = a.x * cs + cs / 2;
+      const ay = a.y * cs + cs / 2;
+      svg += renderAnchorSvg(ax, ay, cs * 0.55, '#b83228');
+      const labelR = cs * 0.18;
+      const lx = a.x * cs + cs - labelR - 2;
+      const ly = a.y * cs + labelR + 2;
+      svg += `<circle cx="${lx}" cy="${ly}" r="${labelR}" fill="#b83228" stroke="#fff" stroke-width="1.5" pointer-events="none"/>`;
+      svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${labelR * 1.3}" font-weight="700" fill="#fff" pointer-events="none">${escapeHtml(a.label)}</text>`;
+    });
+  }
 
   svg += `</g>`;  // lukker grid-wrapper-gruppen
   svg += `</svg>`;
@@ -2363,9 +2364,8 @@ function openTemplateEditor(cardId) {
   });
 }
 
-/* Lagrer hele scenarioet til backend uten å lukke editoren.
-   Brukes når du jobber lenge i kort-editoren og vil lagre underveis
-   uten å miste plassen.
+/* Lagrer kortet, deretter lukker editor og returnerer til scenario-editor
+   p\u00e5 board-tab slik at brukeren ser kortet i sammenheng med boarden.
 */
 async function saveTemplateCardOnly() {
   if (!state.currentScenarioId) {
@@ -2385,6 +2385,8 @@ async function saveTemplateCardOnly() {
       body: { scenario_data: scenarioBuf.scenario_data },
     });
     showToast('Kortet er lagret', 'success');
+    // 3. Lukk editor og returner til board-visning
+    closeTemplateEditor();
   } catch (e) {
     showToast('Lagring feilet: ' + e.message, 'error');
   }
