@@ -1454,9 +1454,78 @@ function updateGrid(field, value) {
   renderBoard();
 }
 
+/* ─── AUTO-SYNK KOORDINATER FRA KORT ─────────────────────
+   Når et template-kort har en koord-overlay, genererer vi en
+   tilsvarende oppføring i scenarios's coordinates-liste basert
+   på kortets plassering på board.
+
+   Datakontrakt:
+   - Auto-genererte koordinater har felt `from_card: <card_id>`
+   - Manuelle koordinater har ingen `from_card`
+   - Når et kort flyttes, oppdateres koordinatets X,Y
+   - Når et kort slettes eller mister koord-overlay, fjernes den auto-koordinaten
+   - Manuelle koordinater berøres aldri av denne funksjonen
+   - 4-koden fra kortets header blir koordinatets `code`
+   ─────────────────────────────────────────────────────── */
+function syncCoordsFromCards() {
+  if (!scenarioBuf || !scenarioBuf.scenario_data) return;
+  const sd = scenarioBuf.scenario_data;
+  if (!Array.isArray(sd.coordinates)) sd.coordinates = [];
+  if (!Array.isArray(sd.physical_cards)) sd.physical_cards = [];
+
+  // Bygg map av eksisterende auto-koordinater per kort-ID
+  const existingByCard = {};
+  sd.coordinates.forEach((c, idx) => {
+    if (c.from_card) existingByCard[c.from_card] = { coord: c, idx };
+  });
+
+  // Behold manuelle (uten from_card) urørt
+  const stillValid = new Set();
+
+  sd.physical_cards.forEach(card => {
+    if (card.type !== 'template') return;
+    if (!Array.isArray(card.overlays)) return;
+    const coordOverlay = card.overlays.find(o => o.type === 'coord');
+    if (!coordOverlay) return;
+
+    // Beregn faktisk X,Y på board
+    const x = (card.grid_x || 0) + coordOverlay.col;
+    const y = (card.grid_y || 0) + coordOverlay.row;
+
+    stillValid.add(card.id);
+
+    if (existingByCard[card.id]) {
+      // Oppdater eksisterende
+      const c = existingByCard[card.id].coord;
+      c.x = x;
+      c.y = y;
+      // Synk 4-koden fra kortets header
+      const code = (card.header?.code || '').trim();
+      if (code) c.code = code;
+    } else {
+      // Opprett ny
+      sd.coordinates.push({
+        x, y,
+        code: (card.header?.code || '').trim(),
+        points: 10,
+        rewards: [],
+        from_card: card.id,
+      });
+    }
+  });
+
+  // Fjern auto-koordinater for kort som er slettet eller har mistet koord-overlay
+  sd.coordinates = sd.coordinates.filter(c => {
+    if (!c.from_card) return true;  // manuelle beholdes
+    return stillValid.has(c.from_card);
+  });
+}
+
 function renderBoard() {
   const wrap = $('#board-canvas-inner');
   if (!wrap) return;
+  // Synkroniser auto-genererte koordinater fra template-kort før rendering
+  syncCoordsFromCards();
   const g = scenarioBuf.scenario_data.grid;
   const cs = g.cell_size;
   const W = g.x * cs;
@@ -2024,14 +2093,16 @@ function renderTemplateCanvas() {
     const x = o.col * cellPx + cellPx / 2;
     const y = o.row * cellPx + cellPx / 2;
     if (o.type === 'anchor') {
-      html += `<g pointer-events="none">`;
-      html += `<circle cx="${x}" cy="${y}" r="${cellPx * 0.32}" fill="rgba(184,50,40,0.85)"/>`;
-      html += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.45}" fill="#fff" font-weight="700">⚓</text>`;
-      html += `</g>`;
+      // Stort anker-symbol uten omkringliggende sirkel
+      html += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.85}" fill="#b83228" font-weight="700" pointer-events="none" style="paint-order:stroke;stroke:#fff;stroke-width:${cellPx * 0.05};stroke-linejoin:round;">⚓</text>`;
     } else if (o.type === 'coord') {
+      // Målskive: to konsentriske ringer i blå med ? i sentrum
+      const r1 = cellPx * 0.42;  // ytre ring
+      const r2 = cellPx * 0.26;  // indre ring
       html += `<g pointer-events="none">`;
-      html += `<circle cx="${x}" cy="${y}" r="${cellPx * 0.32}" fill="rgba(26,74,122,0.85)"/>`;
-      html += `<text x="${x}" y="${y - cellPx * 0.04}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.42}" fill="#fff" font-weight="700">⊕</text>`;
+      html += `<circle cx="${x}" cy="${y}" r="${r1}" fill="#fff" stroke="#1a4a7a" stroke-width="${cellPx * 0.06}"/>`;
+      html += `<circle cx="${x}" cy="${y}" r="${r2}" fill="none" stroke="#1a4a7a" stroke-width="${cellPx * 0.04}"/>`;
+      html += `<text x="${x}" y="${y + cellPx * 0.03}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.36}" fill="#1a4a7a" font-weight="700" font-family="var(--font-serif)">?</text>`;
       html += `</g>`;
     }
   });
@@ -2565,13 +2636,18 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
   (card.overlays || []).forEach(o => {
     const ox = cx + o.col * cellW + cellW/2;
     const oy = cy + o.row * cellH + cellH/2;
-    const r = Math.min(cellW, cellH) * 0.32;
+    const cellSize = Math.min(cellW, cellH);
     if (o.type === 'anchor') {
-      s += `<circle cx="${ox}" cy="${oy}" r="${r}" fill="rgba(184,50,40,0.85)" pointer-events="none"/>`;
-      s += `<text x="${ox}" y="${oy}" text-anchor="middle" dominant-baseline="middle" font-size="${r * 1.1}" fill="#fff" font-weight="700" pointer-events="none">⚓</text>`;
+      // Stort anker uten ring
+      const stroke = cellSize * 0.05;
+      s += `<text x="${ox}" y="${oy}" text-anchor="middle" dominant-baseline="middle" font-size="${cellSize * 0.85}" fill="#b83228" font-weight="700" pointer-events="none" style="paint-order:stroke;stroke:#fff;stroke-width:${stroke};stroke-linejoin:round;">⚓</text>`;
     } else if (o.type === 'coord') {
-      s += `<circle cx="${ox}" cy="${oy}" r="${r}" fill="rgba(26,74,122,0.85)" pointer-events="none"/>`;
-      s += `<text x="${ox}" y="${oy - r * 0.05}" text-anchor="middle" dominant-baseline="middle" font-size="${r * 1.0}" fill="#fff" font-weight="700" pointer-events="none">⊕</text>`;
+      // Målskive med ?
+      const r1 = cellSize * 0.42;
+      const r2 = cellSize * 0.26;
+      s += `<circle cx="${ox}" cy="${oy}" r="${r1}" fill="#fff" stroke="#1a4a7a" stroke-width="${cellSize * 0.06}" pointer-events="none"/>`;
+      s += `<circle cx="${ox}" cy="${oy}" r="${r2}" fill="none" stroke="#1a4a7a" stroke-width="${cellSize * 0.04}" pointer-events="none"/>`;
+      s += `<text x="${ox}" y="${oy + cellSize * 0.03}" text-anchor="middle" dominant-baseline="middle" font-size="${cellSize * 0.36}" fill="#1a4a7a" font-weight="700" font-family="var(--font-serif)" pointer-events="none">?</text>`;
     }
   });
 
@@ -2727,6 +2803,11 @@ function onCardMouseUp() {
   boardState.draggingCard = null;
   document.removeEventListener('mousemove', onCardMouseMove);
   document.removeEventListener('mouseup', onCardMouseUp);
+  // Synk koord-listen hvis koord-fanen er åpen
+  if (activeScTab === 'coords') {
+    renderCoordList();
+    if (editingCoordIdx >= 0) renderCoordDetail();
+  }
 }
 /* ════════════════════════════════════════════════════════
    COORDINATES & REWARDS TAB — inline kort-editor
@@ -2755,16 +2836,21 @@ function renderCoordList() {
   const body = $('#coord-list-body');
   if (!body) return;
   if (list.length === 0) {
-    body.innerHTML = '<div class="muted text-center" style="padding:30px 14px;font-style:italic;font-family:var(--font-serif);">Ingen koordinater. Klikk «+ Ny» eller plasser via investigation board.</div>';
+    body.innerHTML = '<div class="muted text-center" style="padding:30px 14px;font-style:italic;font-family:var(--font-serif);">Ingen koordinater. Plasser et kort med koord-symbol p\u00e5 board, eller klikk «+ Ny».</div>';
     return;
   }
-  body.innerHTML = list.map((c, i) => `
+  body.innerHTML = list.map((c, i) => {
+    const cardLink = c.from_card
+      ? `<span class="cli-card" style="font-size:10px;color:var(--blue);font-style:italic;">⊕ fra kort</span>`
+      : '';
+    return `
     <div class="coord-list-item ${i === editingCoordIdx ? 'active' : ''}" onclick="selectCoord(${i})">
       <span class="cli-coord">(${c.x ?? '—'}, ${c.y ?? '—'})</span>
       <span class="cli-code">${escapeHtml(c.code || '—')}</span>
-      <span class="cli-meta">${(c.rewards || []).length} ${(c.rewards || []).length === 1 ? 'belønning' : 'belønninger'}</span>
+      <span class="cli-meta">${(c.rewards || []).length} ${(c.rewards || []).length === 1 ? 'bel.' : 'bel.'} ${cardLink}</span>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function selectCoord(idx) {
@@ -2794,20 +2880,40 @@ function renderCoordDetail() {
   const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
   if (!c) return;
 
+  const fromCard = c.from_card
+    ? scenarioBuf.scenario_data.physical_cards.find(card => card.id === c.from_card)
+    : null;
+
+  // For auto-genererte koord: X/Y/kode er låst (styres av kort-plassering og header.code)
+  const isAuto = !!c.from_card;
+  const lockedNote = isAuto
+    ? `<div style="background:var(--blue-bg);border-left:3px solid var(--blue);padding:8px 12px;font-size:12px;margin-bottom:14px;color:var(--ink2);line-height:1.4;">
+         <strong>Auto-generert fra kort:</strong> ${escapeHtml(fromCard?.name || c.from_card)}<br>
+         X, Y og 4-koden styres av kortets plassering p\u00e5 board og header-kode. Bel\u00f8nningene under er per koordinat og kan redigeres her.
+       </div>`
+    : '';
+
+  const xyDisabled = isAuto ? 'readonly disabled' : '';
+  const codeDisabled = isAuto ? 'readonly disabled' : '';
+
   detail.innerHTML = `
     <div class="flex-between mb-2">
-      <h3 style="font-family:var(--font-serif);font-size:18px;">Koordinat (${c.x ?? '—'}, ${c.y ?? '—'})</h3>
-      <button class="btn btn-sm btn-danger" onclick="removeCoord(${editingCoordIdx})">✕ Slett koordinat</button>
+      <h3 style="font-family:var(--font-serif);font-size:18px;">Koordinat (${c.x ?? '—'}, ${c.y ?? '—'})${isAuto ? ' <span style="font-size:11px;color:var(--blue);font-style:italic;">⊕ fra kort</span>' : ''}</h3>
+      ${isAuto
+        ? `<button class="btn btn-sm btn-ghost" onclick="openTemplateEditor('${c.from_card}')">\u270e Rediger kort</button>`
+        : `<button class="btn btn-sm btn-danger" onclick="removeCoord(${editingCoordIdx})">\u2715 Slett koordinat</button>`}
     </div>
+
+    ${lockedNote}
 
     <div class="field-row-3">
       <div class="field">
         <label class="field-label">X</label>
-        <input id="cd-x" type="number" min="0" value="${c.x ?? 0}" oninput="updateCoord('x', this.value, true)">
+        <input id="cd-x" type="number" min="0" value="${c.x ?? 0}" ${xyDisabled} oninput="updateCoord('x', this.value, true)">
       </div>
       <div class="field">
         <label class="field-label">Y</label>
-        <input id="cd-y" type="number" min="0" value="${c.y ?? 0}" oninput="updateCoord('y', this.value, true)">
+        <input id="cd-y" type="number" min="0" value="${c.y ?? 0}" ${xyDisabled} oninput="updateCoord('y', this.value, true)">
       </div>
       <div class="field">
         <label class="field-label">Poeng for koordinat</label>
@@ -2817,9 +2923,9 @@ function renderCoordDetail() {
 
     <div class="field">
       <label class="field-label">Verifikasjonskode</label>
-      <input id="cd-code" type="text" value="${escapeHtml(c.code || '')}" placeholder="F.eks. NORDLYS"
+      <input id="cd-code" type="text" value="${escapeHtml(c.code || '')}" placeholder="F.eks. NORDLYS" ${codeDisabled}
              oninput="updateCoord('code', this.value)">
-      <span class="field-hint">Koden deltagerne må skrive inn for å låse opp denne koordinaten.</span>
+      <span class="field-hint">${isAuto ? 'Styres av kortets header-kode (4-tegn).' : 'Koden deltagerne må skrive inn for å låse opp denne koordinaten.'}</span>
     </div>
 
     <div class="divider"></div>
