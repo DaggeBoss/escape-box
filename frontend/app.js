@@ -3397,17 +3397,21 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
      scenarioBuf.scenario_data.board_export_path
    ─────────────────────────────────────────────────────── */
 
-// 5\u00d77 cm @ 150 DPI = 295\u00d7413 px
-const CARD_EXPORT_WIDTH = 295;
-const CARD_EXPORT_HEIGHT = 413;
+// Hver grid-rute = 1 cm fysisk @ 150 DPI \u2248 60 px.
+// PNG-st\u00f8rrelsen blir s\u00e5ledes (cols \u00d7 PX_PER_CELL) \u00d7 (rows \u00d7 PX_PER_CELL).
+// 5\u00d77 kort  \u2192 300\u00d7420 px
+// 14\u00d710 kort \u2192 840\u00d7600 px
+const CARD_EXPORT_PX_PER_CELL = 60;
 
-/* Returnerer ren SVG-streng for ett template-kort, klart for PNG-konvertering. */
+/* Returnerer ren SVG-streng for ett template-kort, klart for PNG-konvertering.
+   Dimensjoner f\u00f8lger kortets cols \u00d7 rows. Hver rute er PX_PER_CELL piksler.
+*/
 function renderTemplateCardForExport(card) {
   ensureTemplateShape(card);
-  const W = CARD_EXPORT_WIDTH;
-  const H = CARD_EXPORT_HEIGHT;
-  const cellW = W / card.cols;
-  const cellH = H / card.rows;
+  const cellW = CARD_EXPORT_PX_PER_CELL;
+  const cellH = CARD_EXPORT_PX_PER_CELL;
+  const W = card.cols * cellW;
+  const H = card.rows * cellH;
   const headerRows = card.header.rows || HEADER_DEFAULT_ROWS;
   const footerRows = card.footer.rows || FOOTER_DEFAULT_ROWS;
   const headerH = headerRows * cellH;
@@ -3602,8 +3606,12 @@ async function exportCardPng(card) {
   if (!card || card.type !== 'template') return null;
   if (!state.currentScenarioId) return null;
   try {
+    // Beregn faktisk PNG-st\u00f8rrelse fra kortets dimensjoner.
+    // Hver rute = PX_PER_CELL piksler, totalt cols\u00d7rows ruter.
+    const W = (card.cols || 5) * CARD_EXPORT_PX_PER_CELL;
+    const H = (card.rows || 7) * CARD_EXPORT_PX_PER_CELL;
     const svg = renderTemplateCardForExport(card);
-    const blob = await svgToPngBlob(svg, CARD_EXPORT_WIDTH, CARD_EXPORT_HEIGHT, '#ffffff');
+    const blob = await svgToPngBlob(svg, W, H, '#ffffff');
     const filename = buildCardExportFilename(card);
 
     // Hvis kortet er blitt renamed eller flyttet mellom grid/bunke, vil
