@@ -1093,6 +1093,8 @@ const boardState = {
   draggingCard: null,        // { cardId, mode: 'move'|'resize', offsetX, offsetY }
   selectedCoord: null,       // {x, y}
   selectedCard: null,
+  hideCards: false,          // skjul kort-grafikk på board, vis kun ankermarkører
+  liveInfo: null,            // { card, anchorXY, coordXY } — vises mens kort dras
 };
 
 /* ─── TEST SCENARIO ─────────────────────────────────────
@@ -1419,7 +1421,21 @@ function renderScBoardTab() {
             <div class="bb-image-pad-text">Last opp bilde<br><span style="opacity:0.6;font-size:10px;">eller dra og slipp</span></div>
           </label>
           <button class="btn btn-sm btn-secondary" style="width:100%;margin-top:6px;" onclick="createTemplateCard()">+ Nytt kort fra null</button>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin:8px 0 0 0;font-size:12px;cursor:pointer;">
+            <input type="checkbox" ${boardState.hideCards ? 'checked' : ''} style="width:auto;" onchange="toggleHideCards(this.checked)">
+            <span>Skjul kort (vis kun ankere)</span>
+          </label>
           <div class="bb-cards-list" id="bb-cards-list"></div>
+        </div>
+
+        <div class="board-config" id="board-anchors-panel">
+          <h4>Ankere</h4>
+          <div id="bb-anchor-list"></div>
+        </div>
+
+        <div class="board-config" id="board-live-info" style="${boardState.liveInfo ? '' : 'display:none;'}">
+          <h4>Posisjon</h4>
+          <div id="bb-live-info-body"></div>
         </div>
 
         <div class="board-config">
@@ -1454,8 +1470,67 @@ function updateGrid(field, value) {
   renderBoard();
 }
 
+function toggleHideCards(checked) {
+  boardState.hideCards = !!checked;
+  renderBoard();
+}
+
+/* Returnerer en liste over ankere på board, med navn A, B, C, ...
+   Hvert objekt: { card_id, name, x, y, label } der x,y er board-koordinater.
+   Rekkefølgen er stabil — basert på kortets posisjon i physical_cards-arrayet.
+   Manuelt anker-navn (card.anchor_name) overstyrer auto-genereringen.
+*/
+function getBoardAnchors() {
+  const cards = scenarioBuf?.scenario_data?.physical_cards || [];
+  const anchors = [];
+  cards.forEach(card => {
+    if (card.type !== 'template') return;
+    const anchorOverlay = (card.overlays || []).find(o => o.type === 'anchor');
+    if (!anchorOverlay) return;
+    anchors.push({
+      card_id: card.id,
+      x: (card.grid_x || 0) + anchorOverlay.col,
+      y: (card.grid_y || 0) + anchorOverlay.row,
+      card,
+    });
+  });
+  // Tildel A, B, C, ...
+  // Hvis kortet har et lagret anchor_name, bruk det. Ellers neste ledige bokstav.
+  const usedLabels = new Set();
+  anchors.forEach(a => {
+    if (a.card.anchor_name) {
+      a.label = a.card.anchor_name;
+      usedLabels.add(a.label);
+    }
+  });
+  let nextChar = 65; // 'A'
+  anchors.forEach(a => {
+    if (a.label) return;
+    while (usedLabels.has(String.fromCharCode(nextChar)) && nextChar <= 90) nextChar++;
+    if (nextChar <= 90) {
+      a.label = String.fromCharCode(nextChar);
+      usedLabels.add(a.label);
+      nextChar++;
+    } else {
+      a.label = '?';
+    }
+  });
+  return anchors;
+}
+
+function setAnchorName(cardId, name) {
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
+  if (!card) return;
+  const v = (name || '').trim().toUpperCase().slice(0, 1);
+  if (v && /^[A-Z]$/.test(v)) {
+    card.anchor_name = v;
+  } else {
+    delete card.anchor_name;
+  }
+  renderBoard();
+}
+
 /* ─── AUTO-SYNK KOORDINATER FRA KORT ─────────────────────
-   Når et template-kort har en koord-overlay, genererer vi en
    tilsvarende oppføring i scenarios's coordinates-liste basert
    på kortets plassering på board.
 
@@ -1564,6 +1639,19 @@ function renderBoard() {
     const ch = card.grid_h * cs;
     const sel = boardState.selectedCard === card.id;
     const imgSrc = card.image_url || card.image_path;
+
+    // Skjul kort-grafikk når toggle er på, men kortets <g>-wrapper må fortsatt finnes
+    // (uten den kan man ikke dra det). Vi tegner bare en transparent ramme.
+    if (boardState.hideCards) {
+      svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
+      svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'rgba(0,0,0,0.1)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : '2 4'}" style="cursor:move;"/>`;
+      if (sel) {
+        svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
+      }
+      svg += `</g>`;
+      return;
+    }
+
     svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
 
     if (card.uploading) {
@@ -1586,11 +1674,110 @@ function renderBoard() {
     svg += `</g>`;
   });
 
+  // ANKER-MARKØRER PÅ BOARD (over kort, alltid synlige)
+  // Disse er beregnet fra kort-plasseringen og overlay-cellen
+  const anchors = getBoardAnchors();
+  anchors.forEach(a => {
+    const ax = a.x * cs + cs / 2;
+    const ay = a.y * cs + cs / 2;
+    // Anker-symbol i lite (ca 0.55 av cellestørrelsen)
+    svg += renderAnchorSvg(ax, ay, cs * 0.55, '#b83228');
+    // Bokstav-label i hjørnet av anker-cellen
+    const labelR = cs * 0.18;
+    const lx = a.x * cs + cs - labelR - 2;
+    const ly = a.y * cs + labelR + 2;
+    svg += `<circle cx="${lx}" cy="${ly}" r="${labelR}" fill="#b83228" stroke="#fff" stroke-width="1.5" pointer-events="none"/>`;
+    svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${labelR * 1.3}" font-weight="700" fill="#fff" pointer-events="none">${escapeHtml(a.label)}</text>`;
+  });
+
   svg += `</svg>`;
   wrap.innerHTML = svg;
 
   renderCardsList();
   renderMiniCoordList();
+  renderAnchorList();
+  renderLiveInfo();
+}
+
+function renderAnchorList() {
+  const el = $('#bb-anchor-list');
+  if (!el) return;
+  const anchors = getBoardAnchors();
+  if (anchors.length === 0) {
+    el.innerHTML = '<div class="muted" style="font-size:11px;font-style:italic;padding:6px 0;">Ingen ankere ennå. Plasser et kort med anker-symbol p\u00e5 boarden.</div>';
+    return;
+  }
+  el.innerHTML = anchors.map(a => `
+    <div class="bb-anchor-row" style="display:flex;gap:6px;align-items:center;padding:5px 6px;border:1px solid var(--rule);border-radius:3px;margin-bottom:4px;background:var(--paper);">
+      <input type="text" maxlength="1" value="${escapeHtml(a.label)}" oninput="setAnchorName('${a.card_id}', this.value)" style="width:30px;text-align:center;font-family:var(--font-cond);font-weight:700;font-size:14px;color:#b83228;padding:2px 4px;">
+      <span style="flex:1;font-family:var(--font-mono);font-size:11px;color:var(--ink2);">(${a.x}, ${a.y})</span>
+      <span style="font-size:11px;color:var(--ink3);max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(a.card.name)}">${escapeHtml(a.card.name)}</span>
+    </div>
+  `).join('');
+}
+
+function renderLiveInfo() {
+  const wrap = $('#board-live-info');
+  if (!wrap) return;
+  if (!boardState.liveInfo) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = '';
+  const body = $('#bb-live-info-body');
+  if (!body) return;
+  const info = boardState.liveInfo;
+  let html = `<div style="font-size:12px;font-family:var(--font-cond);font-weight:700;margin-bottom:6px;">${escapeHtml(info.cardName)}</div>`;
+  html += `<div style="display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12px;font-family:var(--font-mono);">`;
+  html += `<span style="color:var(--ink3);">Kort:</span><span>(${info.gridX}, ${info.gridY})</span>`;
+  if (info.anchorXY) {
+    html += `<span style="color:#b83228;font-weight:700;">⚓ ${escapeHtml(info.anchorLabel || '')}:</span><span>(${info.anchorXY.x}, ${info.anchorXY.y})</span>`;
+  }
+  if (info.coordXY) {
+    html += `<span style="color:#1a4a7a;">⊕ Koord:</span><span>(${info.coordXY.x}, ${info.coordXY.y})</span>`;
+  }
+  if (info.code) {
+    html += `<span style="color:var(--ink3);">Kode:</span><span style="letter-spacing:0.1em;font-weight:700;">${escapeHtml(info.code)}</span>`;
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+}
+
+function updateLiveInfoFromCard(card) {
+  if (!card) {
+    boardState.liveInfo = null;
+    return;
+  }
+  const info = {
+    cardName: card.name || 'Uten navn',
+    gridX: card.grid_x || 0,
+    gridY: card.grid_y || 0,
+    anchorXY: null,
+    coordXY: null,
+    code: card.header?.code || null,
+    anchorLabel: null,
+  };
+  if (card.type === 'template' && Array.isArray(card.overlays)) {
+    const anchor = card.overlays.find(o => o.type === 'anchor');
+    if (anchor) {
+      info.anchorXY = {
+        x: (card.grid_x || 0) + anchor.col,
+        y: (card.grid_y || 0) + anchor.row,
+      };
+      // Slå opp label
+      const allAnchors = getBoardAnchors();
+      const me = allAnchors.find(a => a.card_id === card.id);
+      info.anchorLabel = me?.label || '';
+    }
+    const coord = card.overlays.find(o => o.type === 'coord');
+    if (coord) {
+      info.coordXY = {
+        x: (card.grid_x || 0) + coord.col,
+        y: (card.grid_y || 0) + coord.row,
+      };
+    }
+  }
+  boardState.liveInfo = info;
 }
 
 function renderCardsList() {
@@ -2904,6 +3091,8 @@ function onCardMouseDown(e, cardId, mode = 'move') {
     origW: card.grid_w,
     origH: card.grid_h,
   };
+  // Vis live-info-panelet
+  updateLiveInfoFromCard(card);
   document.addEventListener('mousemove', onCardMouseMove);
   document.addEventListener('mouseup', onCardMouseUp);
   renderBoard();
@@ -2926,12 +3115,19 @@ function onCardMouseMove(e) {
     card.grid_w = Math.max(1, Math.min(g.x - card.grid_x, drag.origW + dx));
     card.grid_h = Math.max(1, Math.min(g.y - card.grid_y, drag.origH + dy));
   }
+  // Oppdater live-info under drag
+  updateLiveInfoFromCard(card);
   // Rerender bare kortet, ikke hele grid (rask oppdatering)
   renderBoard();
 }
 
 function onCardMouseUp() {
   boardState.draggingCard = null;
+  // Behold liveInfo synlig en kort stund etter slipp så brukeren ser sluttverdiene
+  setTimeout(() => {
+    boardState.liveInfo = null;
+    renderLiveInfo();
+  }, 2500);
   document.removeEventListener('mousemove', onCardMouseMove);
   document.removeEventListener('mouseup', onCardMouseUp);
   // Synk koord-listen hvis koord-fanen er åpen
