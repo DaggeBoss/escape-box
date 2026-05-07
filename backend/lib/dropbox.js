@@ -287,11 +287,30 @@ function buildScenarioImagePath(scenarioId, kind, originalFilename) {
   if (!validKinds.includes(kind)) {
     throw new Error(`Ugyldig bilde-kind: ${kind}. Må være en av ${validKinds.join(', ')}`);
   }
-  const ext = (originalFilename.match(/\.[^.]+$/) || ['.jpg'])[0].toLowerCase();
-  // Unikt filnavn: timestamp + random suffix for å unngå kollisjoner
-  const ts = Date.now();
-  const rand = Math.random().toString(36).slice(2, 8);
-  const filename = `${ts}-${rand}${ext}`;
+
+  // Behold det innsendte filnavnet hvis det ser ut som et "ekte" navn
+  // (dvs. inneholder bokstaver utover bare tall/streker). Dette gjør at
+  // PNG-eksporter med deterministiske navn som "Grid-foo.png" forblir
+  // stabile mellom redigeringer slik at overwrite faktisk fungerer.
+  //
+  // For ad-hoc opplastinger (kort-bilder fra brukeren med navn som
+  // "skjermbilde.png") legges det til et timestamp-prefix slik at flere
+  // bilder med samme navn ikke kolliderer.
+  let filename;
+  const safeName = (originalFilename || '').replace(/[\u0000-\u001f\\\/]/g, '').trim();
+  const looksDeterministic = /^(Grid|Bunke|export|thumb-Grid|thumb-Bunke|thumb-export)/i.test(safeName);
+
+  if (safeName && looksDeterministic) {
+    // Bruk filnavnet som-er — krevet for overwrite-flyten
+    filename = safeName;
+  } else {
+    // Ad-hoc upload: legg p\u00e5 timestamp + random for \u00e5 unng\u00e5 kollisjoner
+    const ext = (safeName.match(/\.[^.]+$/) || ['.jpg'])[0].toLowerCase();
+    const ts = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+    filename = `${ts}-${rand}${ext}`;
+  }
+
   return {
     dir: `${ROOT}/scenarios/${scenarioId}/${kind}`,
     filename,
