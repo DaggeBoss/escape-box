@@ -1598,78 +1598,92 @@ function onCellClick(x, y) {
   switchScTab('coords');
 }
 
-function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
-  const cellW = cw / card.cols;
-  const cellH = ch / card.rows;
-  let s = '';
-
-  // Bakgrunn
-  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#faf8f3" style="cursor:move;"/>`;
-
-  // Mini-rutenett-linjer
-  for (let r = 1; r < card.rows; r++) {
-    s += `<line x1="${cx}" y1="${cy + r*cellH}" x2="${cx + cw}" y2="${cy + r*cellH}" stroke="#d8d0bd" stroke-width="0.5" pointer-events="none"/>`;
-  }
-  for (let c = 1; c < card.cols; c++) {
-    s += `<line x1="${cx + c*cellW}" y1="${cy}" x2="${cx + c*cellW}" y2="${cy + ch}" stroke="#d8d0bd" stroke-width="0.5" pointer-events="none"/>`;
-  }
-
-  // Innhold i cellene
-  (card.cells || []).forEach(cell => {
-    const x = cx + cell.col * cellW;
-    const y = cy + cell.row * cellH;
-    const midX = x + cellW/2;
-    const midY = y + cellH/2;
-    const minDim = Math.min(cellW, cellH);
-
-    if (cell.type === 'anchor') {
-      s += `<circle cx="${midX}" cy="${midY}" r="${minDim * 0.3}" fill="var(--red)" opacity="0.2" pointer-events="none"/>`;
-      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-size="${minDim * 0.5}" fill="var(--red)" font-weight="700" pointer-events="none">⚓</text>`;
-    } else if (cell.type === 'coord') {
-      s += `<circle cx="${midX}" cy="${midY}" r="${minDim * 0.3}" fill="var(--blue)" opacity="0.2" pointer-events="none"/>`;
-      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-size="${minDim * 0.45}" fill="var(--blue)" font-weight="700" pointer-events="none">⊕</text>`;
-    } else if (cell.type === 'text') {
-      const txt = (cell.text || '').slice(0, 12);
-      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${Math.min(11, minDim * 0.22)}" fill="var(--ink)" pointer-events="none">${escapeHtml(txt)}</text>`;
-    } else if (cell.type === 'image' && (cell.thumb_url || cell.url)) {
-      s += `<image href="${escapeHtml(cell.thumb_url || cell.url)}" x="${x + 2}" y="${y + 2}" width="${cellW - 4}" height="${cellH - 4}" preserveAspectRatio="xMidYMid meet" pointer-events="none"/>`;
-    }
-  });
-
-  // Ramme
-  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}" pointer-events="none"/>`;
-
-  return s;
-}
-
-/* ─── KORT-TEMPLATE-EDITOR ──────────────────────────────
-   Lager kort fra null med rutenett (cols × rows), der hver
-   celle kan inneholde:
-   - anchor: kortets nullpunkt på Investigation Board (én per kort)
-   - coord:  peker mot en koordinat (X,Y i scenariokart)
-   - text:   en tekstetikett
-   - image:  et opplastet bilde
+/* ════════════════════════════════════════════════════════
+   KORT-TEMPLATE-EDITOR v2 — header / content / footer + grid-overlay
 
    Datamodell (lagret i physical_cards-arrayet):
    {
      id: 'card_xxx',
      type: 'template',
-     name: 'Document Folder 1',
-     cols: 3, rows: 5,
-     cells: [
-       { col, row, type: 'anchor' },
-       { col, row, type: 'coord', coord_x, coord_y },
-       { col, row, type: 'text', text, style },
-       { col, row, type: 'image', url, thumb_url, path, thumb_path },
+     name: 'Document Folder 1',         // intern, vises i kortliste
+     cols: 5, rows: 7,                   // grid-størrelse
+     header: { title, code, bg_color, text_color, height_pct },
+     footer: { items: [...], bg_color, text_color, height_pct },
+     content: { layers: [...], bg_color },
+     overlays: [
+       { type: 'anchor', col, row },
+       { type: 'coord',  col, row, coord_x, coord_y }
      ],
-     // Plassering på Investigation Board:
-     grid_x, grid_y, grid_w, grid_h
+     grid_x, grid_y, grid_w, grid_h     // plassering på Investigation Board
    }
+
+   Lag-typer i content.layers:
+     { type: 'image', url, thumb_url, path, thumb_path, x_pct, y_pct, w_pct, h_pct }
+     { type: 'text',  value, font_size, color, bg_color, x_pct, y_pct, w_pct, h_pct }
+
+   Footer-items:
+     { type: 'text',   value }
+     { type: 'symbol', value }    // emoji eller unicode-symbol
    ─────────────────────────────────────────────────────── */
 
 let templateBuf = null;
-let templateTool = 'anchor';
-let templateSelectedCell = null;
+let templateTool = 'select';        // 'select' | 'anchor' | 'coord'
+let templateSelectedZone = null;    // 'header' | 'content' | 'footer' | null
+let templateSelectedLayer = -1;     // index i content.layers, eller -1
+let templateSelectedFooterItem = -1;
+let templateDrag = null;            // { mode, layerIdx, startX, startY, orig... }
+
+// Hvor mange prosent av kortet header/footer tar
+const HEADER_DEFAULT_PCT = 12;
+const FOOTER_DEFAULT_PCT = 10;
+
+// Symbolutvalg for footer
+const FOOTER_SYMBOLS = ['🔒','🔑','⚠','☢','⛔','📁','📎','🔍','🚨','★','◆','●','✦','✱','⚙','🎯','🧩','📌'];
+
+function ensureTemplateShape(card) {
+  if (!card) return;
+  if (!card.cols) card.cols = 5;
+  if (!card.rows) card.rows = 7;
+  if (!card.header) {
+    card.header = {
+      title: card.name || 'Tittel',
+      code: '',
+      bg_color: '#1a4a7a',
+      text_color: '#ffffff',
+      height_pct: HEADER_DEFAULT_PCT,
+    };
+  }
+  if (!card.footer) {
+    card.footer = {
+      items: [],
+      bg_color: '#ede8dc',
+      text_color: '#1a1610',
+      height_pct: FOOTER_DEFAULT_PCT,
+    };
+  }
+  if (!card.content) {
+    card.content = {
+      layers: [],
+      bg_color: '#faf8f3',
+    };
+  }
+  if (!Array.isArray(card.overlays)) {
+    // Migrer gamle 'cells'-data hvis det finnes
+    card.overlays = [];
+    if (Array.isArray(card.cells)) {
+      card.cells.forEach(c => {
+        if (c.type === 'anchor' || c.type === 'coord') {
+          card.overlays.push(
+            c.type === 'coord'
+              ? { type: 'coord', col: c.col, row: c.row, coord_x: c.coord_x, coord_y: c.coord_y }
+              : { type: 'anchor', col: c.col, row: c.row }
+          );
+        }
+      });
+      delete card.cells;
+    }
+  }
+}
 
 function createTemplateCard() {
   const id = 'card_' + Date.now();
@@ -1677,32 +1691,51 @@ function createTemplateCard() {
     id,
     type: 'template',
     name: 'Nytt kort',
-    cols: 3,
-    rows: 5,
-    cells: [],
+    cols: 5,
+    rows: 7,
     grid_x: 0,
     grid_y: 0,
-    grid_w: 3,
-    grid_h: 5,
+    grid_w: 5,
+    grid_h: 7,
   };
+  ensureTemplateShape(card);
   scenarioBuf.scenario_data.physical_cards.push(card);
   boardState.selectedCard = id;
   openTemplateEditor(id);
 }
 
+/* Lukker template-editor og GJEN-ÅPNER scenario-editor med riktig tab.
+   Dette løser lagrings-buggen — ellers ville endringer ikke kunne lagres
+   fordi scenario-editor-modalen er blitt erstattet. */
+function closeTemplateEditor() {
+  templateBuf = null;
+  templateSelectedZone = null;
+  templateSelectedLayer = -1;
+  templateDrag = null;
+  closeModal();
+  // Gjenåpne scenario-editor på samme sted (board-tab)
+  if (state.currentScenarioId) {
+    activeScTab = 'board';
+    openScenarioEditor(state.currentScenarioId);
+  }
+}
+
 function openTemplateEditor(cardId) {
   const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
   if (!card) return;
-  templateBuf = card;  // Direkte referanse — endringer skjer på live data
-  templateTool = 'anchor';
-  templateSelectedCell = null;
+  ensureTemplateShape(card);
+  templateBuf = card;
+  templateTool = 'select';
+  templateSelectedZone = null;
+  templateSelectedLayer = -1;
+  templateSelectedFooterItem = -1;
 
   openModal({
-    title: 'Kort: ' + (card.name || 'Uten navn'),
+    title: 'Kort-editor: ' + (card.name || 'Uten navn'),
     size: 'xl',
     body: renderTemplateEditor(),
     footer: `
-      <button class="btn btn-secondary" onclick="closeModal()">Lukk</button>
+      <button class="btn btn-secondary" onclick="closeTemplateEditor()">⤺ Tilbake til scenario</button>
     `,
   });
 }
@@ -1710,29 +1743,54 @@ function openTemplateEditor(cardId) {
 function renderTemplateEditor() {
   return `
     <style>
-      .te-layout { display:grid; grid-template-columns: 220px 1fr 280px; gap:16px; height:520px; }
+      .te-layout { display:grid; grid-template-columns: 200px 1fr 300px; gap:14px; height:560px; }
       .te-toolbar h4 { font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin:0 0 8px; }
-      .te-tools { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
-      .te-tool { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1.5px solid var(--rule); background:var(--paper); border-radius:3px; cursor:pointer; font-family:var(--font-cond); font-size:13px; transition:border-color 0.12s, background 0.12s; }
+      .te-tools { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+      .te-tool { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1.5px solid var(--rule); background:var(--paper); border-radius:3px; cursor:pointer; font-family:var(--font-cond); font-size:12px; transition:all 0.12s; }
       .te-tool:hover { border-color:var(--blue); background:var(--blue-bg); }
       .te-tool.active { border-color:var(--ink); background:var(--ink); color:#fff; }
-      .te-tool-icon { font-size:18px; line-height:1; width:22px; text-align:center; }
+      .te-tool-icon { font-size:16px; line-height:1; width:20px; text-align:center; }
       .te-meta { display:flex; flex-direction:column; gap:8px; padding:10px; background:var(--bg2); border-radius:3px; margin-top:auto; }
-      .te-meta input[type=number] { width:60px; }
-      .te-canvas-wrap { display:flex; align-items:center; justify-content:center; background:var(--bg2); border-radius:3px; overflow:hidden; padding:20px; }
-      .te-canvas { background:#faf8f3; border:1.5px solid var(--ink2); }
-      .te-cell { fill:transparent; stroke:#d8d0bd; stroke-width:0.5; cursor:pointer; transition:fill 0.1s; }
-      .te-cell:hover { fill:rgba(26,74,122,0.08); }
-      .te-cell.selected { fill:rgba(200,150,26,0.15); stroke:var(--gold); stroke-width:2; }
-      .te-anchor { fill:var(--red); }
-      .te-coord-marker { fill:var(--blue); }
-      .te-cell-text { font-family:var(--font-cond); font-size:10px; fill:var(--ink); pointer-events:none; }
+      .te-meta input[type=number] { width:100%; }
+      .te-meta input[type=text] { width:100%; }
+      .te-canvas-wrap { display:flex; align-items:center; justify-content:center; background:var(--bg2); border-radius:3px; overflow:auto; padding:20px; }
+      .te-card { background:#fff; box-shadow:0 4px 16px rgba(0,0,0,0.15); position:relative; user-select:none; }
+      .te-zone { position:absolute; left:0; right:0; cursor:pointer; transition:outline 0.12s; outline:2px solid transparent; outline-offset:-2px; }
+      .te-zone:hover { outline-color:rgba(26,74,122,0.3); }
+      .te-zone.selected { outline-color:var(--blue); }
+      .te-zone-header { top:0; display:flex; align-items:center; justify-content:space-between; padding:0 8%; }
+      .te-zone-footer { bottom:0; display:flex; align-items:center; gap:6px; padding:0 8%; }
+      .te-zone-content { background-clip:padding-box; }
+      .te-header-title { font-family:var(--font-serif); font-weight:700; }
+      .te-header-code { font-family:var(--font-mono); font-weight:500; letter-spacing:0.1em; }
+      .te-footer-item { display:inline-flex; align-items:center; }
+      .te-grid-overlay { position:absolute; top:0; left:0; right:0; bottom:0; pointer-events:none; }
+      .te-grid-overlay rect { fill:transparent; stroke:rgba(60,40,20,0.32); stroke-width:0.6; stroke-dasharray:2 2; }
+      .te-grid-overlay rect.tool-active { pointer-events:auto; cursor:crosshair; }
+      .te-grid-overlay rect.tool-active:hover { fill:rgba(184,108,0,0.18); }
+      .te-overlay-marker { font-size:18px; pointer-events:none; }
+      .te-content-layer { position:absolute; cursor:move; }
+      .te-content-layer.selected { outline:2px dashed var(--blue); outline-offset:1px; }
+      .te-resize-handle { position:absolute; width:10px; height:10px; background:var(--blue); border:1px solid #fff; border-radius:50%; }
+      .te-resize-handle.se { right:-5px; bottom:-5px; cursor:se-resize; }
       .te-side h4 { font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin:0 0 8px; }
       .te-prop { padding:10px; background:var(--paper); border:1px solid var(--rule); border-radius:3px; }
-      .te-prop label { display:block; font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink3); margin-bottom:4px; }
-      .te-prop input, .te-prop select, .te-prop textarea { width:100%; margin-bottom:8px; }
+      .te-prop label { display:block; font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink3); margin-bottom:4px; margin-top:8px; }
+      .te-prop label:first-of-type { margin-top:0; }
+      .te-prop input, .te-prop select, .te-prop textarea { width:100%; }
+      .te-prop input[type=color] { width:60px; height:32px; padding:2px; cursor:pointer; }
       .te-prop-empty { color:var(--ink3); font-size:13px; font-style:italic; padding:12px; text-align:center; }
-      .te-cell-icon { width:60%; height:60%; }
+      .te-symbol-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:4px; margin-top:6px; }
+      .te-symbol-btn { background:var(--bg); border:1px solid var(--rule); border-radius:3px; padding:6px; font-size:18px; cursor:pointer; transition:background 0.1s; }
+      .te-symbol-btn:hover { background:var(--blue-bg); border-color:var(--blue); }
+      .te-footer-item-row { display:flex; gap:6px; align-items:center; padding:4px; border:1px solid var(--rule); border-radius:2px; margin-bottom:4px; background:var(--bg); }
+      .te-footer-item-row.selected { border-color:var(--blue); background:var(--blue-bg); }
+      .te-footer-item-row input { flex:1; }
+      .te-layer-row { display:flex; gap:6px; align-items:center; padding:6px; border:1px solid var(--rule); border-radius:2px; margin-bottom:4px; background:var(--bg); cursor:pointer; }
+      .te-layer-row.selected { border-color:var(--blue); background:var(--blue-bg); }
+      .te-layer-row .layer-name { flex:1; font-size:12px; }
+      .te-layer-thumb { width:32px; height:32px; background-size:cover; background-position:center; border:1px solid var(--rule); border-radius:2px; flex-shrink:0; }
+      .te-layer-text-thumb { width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-size:18px; background:var(--bg2); border:1px solid var(--rule); border-radius:2px; flex-shrink:0; }
     </style>
 
     <div class="te-layout">
@@ -1740,56 +1798,42 @@ function renderTemplateEditor() {
       <div class="te-toolbar" style="display:flex;flex-direction:column;">
         <h4>Verktøy</h4>
         <div class="te-tools">
+          <div class="te-tool ${templateTool === 'select' ? 'active' : ''}" onclick="setTemplateTool('select')">
+            <span class="te-tool-icon">↖</span>
+            <div>
+              <div style="font-weight:700;">Velg</div>
+              <div style="font-size:10px;opacity:0.7;">Klikk soner/lag</div>
+            </div>
+          </div>
           <div class="te-tool ${templateTool === 'anchor' ? 'active' : ''}" onclick="setTemplateTool('anchor')">
             <span class="te-tool-icon">⚓</span>
             <div>
               <div style="font-weight:700;">Anker</div>
-              <div style="font-size:10px;opacity:0.7;">Kortets nullpunkt</div>
+              <div style="font-size:10px;opacity:0.7;">Klikk i grid</div>
             </div>
           </div>
           <div class="te-tool ${templateTool === 'coord' ? 'active' : ''}" onclick="setTemplateTool('coord')">
             <span class="te-tool-icon">⊕</span>
             <div>
               <div style="font-weight:700;">Koordinat</div>
-              <div style="font-size:10px;opacity:0.7;">Peker mot X,Y</div>
-            </div>
-          </div>
-          <div class="te-tool ${templateTool === 'text' ? 'active' : ''}" onclick="setTemplateTool('text')">
-            <span class="te-tool-icon">T</span>
-            <div>
-              <div style="font-weight:700;">Tekst</div>
-              <div style="font-size:10px;opacity:0.7;">Etikett</div>
-            </div>
-          </div>
-          <div class="te-tool ${templateTool === 'image' ? 'active' : ''}" onclick="setTemplateTool('image')">
-            <span class="te-tool-icon">🖼</span>
-            <div>
-              <div style="font-weight:700;">Bilde</div>
-              <div style="font-size:10px;opacity:0.7;">Last opp i celle</div>
-            </div>
-          </div>
-          <div class="te-tool ${templateTool === 'erase' ? 'active' : ''}" onclick="setTemplateTool('erase')">
-            <span class="te-tool-icon">✕</span>
-            <div>
-              <div style="font-weight:700;">Fjern</div>
-              <div style="font-size:10px;opacity:0.7;">Slett innhold i celle</div>
+              <div style="font-size:10px;opacity:0.7;">Klikk i grid</div>
             </div>
           </div>
         </div>
 
         <div class="te-meta">
           <div>
-            <label class="field-label" style="display:block;font-size:10px;">Kortnavn</label>
-            <input type="text" id="te-name" value="${escapeHtml(templateBuf.name || '')}" oninput="updateTemplateName(this.value)">
+            <label class="field-label" style="font-size:10px;">Kortnavn (intern)</label>
+            <input type="text" value="${escapeHtml(templateBuf.name || '')}" oninput="updateTemplateName(this.value)">
           </div>
           <div style="display:flex;gap:8px;">
             <div style="flex:1;">
-              <label class="field-label" style="display:block;font-size:10px;">Kolonner</label>
-              <input type="number" min="1" max="10" value="${templateBuf.cols}" oninput="updateTemplateGrid('cols', this.value)" style="width:100%;">
+              <label class="field-label" style="font-size:10px;">Kolonner</label>
+              <input type="number" min="1" max="12" value="${templateBuf.cols}" oninput="updateTemplateGrid('cols', this.value)">
             </div>
             <div style="flex:1;">
-              <label class="field-label" style="display:block;font-size:10px;">Rader</label>
-              <input type="number" min="1" max="10" value="${templateBuf.rows}" oninput="updateTemplateGrid('rows', this.value)" style="width:100%;">
+              <label class="field-label" style="font-size:10px;">Rader</label>
+              <input type="number" min="1" max="14" value="${templateBuf.rows}" oninput="updateTemplateGrid('rows', this.value)">
             </div>
           </div>
         </div>
@@ -1811,9 +1855,11 @@ function renderTemplateEditor() {
 
 function setTemplateTool(tool) {
   templateTool = tool;
-  // Bare oppdater verktøyradens active-state
+  // Bare oppdater verktøyradens active-state, ikke hele canvas (dyrt)
   $$('#modal .te-tool').forEach(el => el.classList.remove('active'));
   $(`#modal .te-tool[onclick*="'${tool}'"]`)?.classList.add('active');
+  // Re-render canvas slik at grid-overlay får riktig pointer-events
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
 }
 
 function updateTemplateName(name) {
@@ -1822,205 +1868,450 @@ function updateTemplateName(name) {
 }
 
 function updateTemplateGrid(field, value) {
-  const n = Math.max(1, Math.min(10, parseInt(value, 10) || 1));
+  const max = field === 'cols' ? 12 : 14;
+  const n = Math.max(1, Math.min(max, parseInt(value, 10) || 1));
   templateBuf[field] = n;
-  // Fjern celler utenfor nye grenser
-  templateBuf.cells = templateBuf.cells.filter(c =>
-    c.col < templateBuf.cols && c.row < templateBuf.rows
+  // Fjern overlay-markører utenfor nye grenser
+  templateBuf.overlays = templateBuf.overlays.filter(o =>
+    o.col < templateBuf.cols && o.row < templateBuf.rows
   );
-  // Oppdater også grid_w/grid_h så plassering på board passer
   templateBuf.grid_w = templateBuf.cols;
   templateBuf.grid_h = templateBuf.rows;
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
   renderBoard();
 }
 
-function renderTemplateCanvas() {
-  const cellSize = 60;
-  const W = templateBuf.cols * cellSize;
-  const H = templateBuf.rows * cellSize;
-  const cells = templateBuf.cells || [];
-  const cellsByPos = {};
-  cells.forEach(c => { cellsByPos[`${c.col},${c.row}`] = c; });
-
-  let svg = `<svg class="te-canvas" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
-
-  // Bakgrunn
-  svg += `<rect width="${W}" height="${H}" fill="#faf8f3"/>`;
-
-  // Celler
-  for (let row = 0; row < templateBuf.rows; row++) {
-    for (let col = 0; col < templateBuf.cols; col++) {
-      const x = col * cellSize;
-      const y = row * cellSize;
-      const cell = cellsByPos[`${col},${row}`];
-      const sel = templateSelectedCell && templateSelectedCell.col === col && templateSelectedCell.row === row;
-      const cls = `te-cell${sel ? ' selected' : ''}`;
-      svg += `<rect class="${cls}" x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" onclick="onTemplateCellClick(${col}, ${row})"/>`;
-
-      if (cell) {
-        if (cell.type === 'anchor') {
-          // Rødt anker-symbol
-          svg += `<g pointer-events="none" transform="translate(${x + cellSize/2}, ${y + cellSize/2})">`;
-          svg += `<circle r="14" fill="var(--red)" opacity="0.15"/>`;
-          svg += `<text text-anchor="middle" dominant-baseline="middle" font-size="22" fill="var(--red)" font-weight="700">⚓</text>`;
-          svg += `</g>`;
-        } else if (cell.type === 'coord') {
-          svg += `<g pointer-events="none" transform="translate(${x + cellSize/2}, ${y + cellSize/2})">`;
-          svg += `<circle r="14" fill="var(--blue)" opacity="0.15"/>`;
-          svg += `<text text-anchor="middle" dominant-baseline="middle" font-size="20" fill="var(--blue)" font-weight="700">⊕</text>`;
-          svg += `<text text-anchor="middle" y="22" font-size="10" fill="var(--blue)" font-family="var(--font-mono)">${cell.coord_x ?? '?'},${cell.coord_y ?? '?'}</text>`;
-          svg += `</g>`;
-        } else if (cell.type === 'text') {
-          // Tekstetikett
-          const text = cell.text || '...';
-          svg += `<text x="${x + cellSize/2}" y="${y + cellSize/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-serif)" font-size="11" fill="var(--ink)" pointer-events="none">${escapeHtml(text.slice(0, 20))}</text>`;
-        } else if (cell.type === 'image' && (cell.thumb_url || cell.url)) {
-          svg += `<image href="${escapeHtml(cell.thumb_url || cell.url)}" x="${x + 4}" y="${y + 4}" width="${cellSize - 8}" height="${cellSize - 8}" preserveAspectRatio="xMidYMid meet" pointer-events="none"/>`;
-        } else if (cell.type === 'image') {
-          // Image-celle uten lastet bilde ennå (placeholder)
-          svg += `<text x="${x + cellSize/2}" y="${y + cellSize/2}" text-anchor="middle" dominant-baseline="middle" font-size="20" pointer-events="none">🖼</text>`;
-        }
-      }
-    }
-  }
-
-  svg += `</svg>`;
-  return svg;
+/* ─── KORT-CANVAS ─── */
+function getCardCanvasSize() {
+  // Vi rendrer kortet i en fast pikselstørrelse i editoren basert på cols/rows.
+  // 60px per celle gir et godt balansert kort (5x7 = 300x420).
+  const cellPx = 60;
+  return {
+    cellPx,
+    width: templateBuf.cols * cellPx,
+    height: templateBuf.rows * cellPx,
+  };
 }
 
-function onTemplateCellClick(col, row) {
-  const existing = templateBuf.cells.find(c => c.col === col && c.row === row);
+function renderTemplateCanvas() {
+  const { cellPx, width, height } = getCardCanvasSize();
+  const headerH = (height * (templateBuf.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
+  const footerH = (height * (templateBuf.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
+  const contentY = headerH;
+  const contentH = height - headerH - footerH;
 
-  if (templateTool === 'erase') {
-    if (existing) {
-      templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-      templateSelectedCell = null;
-      $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
-      $('#te-prop-panel').innerHTML = renderTemplateProps();
-      renderBoard();
+  // Beregn pikselstørrelser for tekst i header/footer basert på sone-høyde
+  const headerFontSize = Math.max(11, Math.round(headerH * 0.42));
+  const footerFontSize = Math.max(10, Math.round(footerH * 0.45));
+
+  let html = `<div class="te-card" style="width:${width}px;height:${height}px;background:${templateBuf.content.bg_color};">`;
+
+  // CONTENT-sone (legges først så soner over kan overlappe i z-order)
+  html += `<div class="te-zone te-zone-content${templateSelectedZone === 'content' ? ' selected' : ''}" style="top:${contentY}px;height:${contentH}px;background:${templateBuf.content.bg_color};" onclick="selectTemplateZone(event, 'content')">`;
+  // Lag i content
+  (templateBuf.content.layers || []).forEach((layer, idx) => {
+    const x = (layer.x_pct || 0) * width / 100;
+    const y = (layer.y_pct || 0) * contentH / 100;
+    const w = (layer.w_pct || 50) * width / 100;
+    const h = (layer.h_pct || 50) * contentH / 100;
+    const sel = (templateSelectedLayer === idx && templateSelectedZone === 'content');
+    html += `<div class="te-content-layer${sel ? ' selected' : ''}" data-layer-idx="${idx}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;" onmousedown="onLayerMouseDown(event, ${idx})">`;
+    if (layer.type === 'image' && (layer.thumb_url || layer.url)) {
+      html += `<img src="${escapeHtml(layer.thumb_url || layer.url)}" style="width:100%;height:100%;object-fit:contain;display:block;pointer-events:none;" draggable="false">`;
+    } else if (layer.type === 'image') {
+      html += `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#eee;color:#999;font-size:24px;pointer-events:none;">🖼</div>`;
+    } else if (layer.type === 'text') {
+      const fz = layer.font_size || 16;
+      const col = layer.color || '#1a1610';
+      const bgc = layer.bg_color || 'transparent';
+      const txt = layer.value || '';
+      html += `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--font-serif);font-size:${fz}px;color:${col};background:${bgc};text-align:center;padding:4px;pointer-events:none;word-break:break-word;">${escapeHtml(txt)}</div>`;
     }
+    if (sel) {
+      html += `<div class="te-resize-handle se" onmousedown="onLayerMouseDown(event, ${idx}, 'resize-se')"></div>`;
+    }
+    html += `</div>`;
+  });
+  html += `</div>`;
+
+  // HEADER-sone
+  html += `<div class="te-zone te-zone-header${templateSelectedZone === 'header' ? ' selected' : ''}" style="height:${headerH}px;background:${templateBuf.header.bg_color};color:${templateBuf.header.text_color};" onclick="selectTemplateZone(event, 'header')">`;
+  html += `<span class="te-header-title" style="font-size:${headerFontSize}px;">${escapeHtml(templateBuf.header.title || '')}</span>`;
+  html += `<span class="te-header-code" style="font-size:${headerFontSize * 0.85}px;">${escapeHtml(templateBuf.header.code || '')}</span>`;
+  html += `</div>`;
+
+  // FOOTER-sone
+  html += `<div class="te-zone te-zone-footer${templateSelectedZone === 'footer' ? ' selected' : ''}" style="height:${footerH}px;background:${templateBuf.footer.bg_color};color:${templateBuf.footer.text_color};" onclick="selectTemplateZone(event, 'footer')">`;
+  (templateBuf.footer.items || []).forEach(item => {
+    if (item.type === 'symbol') {
+      html += `<span class="te-footer-item" style="font-size:${footerFontSize * 1.2}px;">${escapeHtml(item.value || '')}</span>`;
+    } else {
+      html += `<span class="te-footer-item" style="font-size:${footerFontSize}px;font-family:var(--font-cond);">${escapeHtml(item.value || '')}</span>`;
+    }
+  });
+  html += `</div>`;
+
+  // GRID-OVERLAY (stiplet, oppå alt)
+  html += `<svg class="te-grid-overlay" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+  // Kun grid-celler for anchor/coord-verktøy får pointer events
+  const toolActive = (templateTool === 'anchor' || templateTool === 'coord');
+  for (let row = 0; row < templateBuf.rows; row++) {
+    for (let col = 0; col < templateBuf.cols; col++) {
+      const x = col * cellPx;
+      const y = row * cellPx;
+      const cls = toolActive ? 'tool-active' : '';
+      html += `<rect class="${cls}" x="${x}" y="${y}" width="${cellPx}" height="${cellPx}" onclick="onGridCellClick(event, ${col}, ${row})"/>`;
+    }
+  }
+  // Anker- og koord-markører (oppå alt)
+  (templateBuf.overlays || []).forEach((o, oIdx) => {
+    const x = o.col * cellPx + cellPx / 2;
+    const y = o.row * cellPx + cellPx / 2;
+    if (o.type === 'anchor') {
+      html += `<g pointer-events="none">`;
+      html += `<circle cx="${x}" cy="${y}" r="${cellPx * 0.32}" fill="rgba(184,50,40,0.85)"/>`;
+      html += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.45}" fill="#fff" font-weight="700">⚓</text>`;
+      html += `</g>`;
+    } else if (o.type === 'coord') {
+      html += `<g pointer-events="none">`;
+      html += `<circle cx="${x}" cy="${y}" r="${cellPx * 0.32}" fill="rgba(26,74,122,0.85)"/>`;
+      html += `<text x="${x}" y="${y - cellPx * 0.04}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.42}" fill="#fff" font-weight="700">⊕</text>`;
+      html += `</g>`;
+    }
+  });
+  html += `</svg>`;
+
+  html += `</div>`;
+  return html;
+}
+
+/* ─── ZONE-VALG ─── */
+function selectTemplateZone(e, zone) {
+  // Hvis brukeren klikker på et lag inne i content, ikke endre zone
+  if (e.target.closest('.te-content-layer')) return;
+  if (templateTool !== 'select') return;
+
+  templateSelectedZone = zone;
+  templateSelectedLayer = -1;
+  templateSelectedFooterItem = -1;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderTemplateProps();
+}
+
+/* ─── GRID-CELLE-KLIKK (for anker og koord) ─── */
+function onGridCellClick(e, col, row) {
+  e.stopPropagation();
+  if (templateTool === 'anchor') {
+    // Maks ett anker — fjern eksisterende
+    templateBuf.overlays = templateBuf.overlays.filter(o => o.type !== 'anchor');
+    templateBuf.overlays.push({ type: 'anchor', col, row });
+  } else if (templateTool === 'coord') {
+    // Maks ett koord-symbol — fjern eksisterende
+    templateBuf.overlays = templateBuf.overlays.filter(o => o.type !== 'coord');
+    templateBuf.overlays.push({ type: 'coord', col, row, coord_x: null, coord_y: null });
+  } else {
     return;
   }
-
-  // Plasser nytt element av valgt type
-  if (templateTool === 'anchor') {
-    // Bare ett anker per kort — fjern eksisterende
-    templateBuf.cells = templateBuf.cells.filter(c => c.type !== 'anchor');
-    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-    templateBuf.cells.push({ col, row, type: 'anchor' });
-  } else if (templateTool === 'coord') {
-    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-    templateBuf.cells.push({ col, row, type: 'coord', coord_x: null, coord_y: null });
-  } else if (templateTool === 'text') {
-    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-    templateBuf.cells.push({ col, row, type: 'text', text: '' });
-  } else if (templateTool === 'image') {
-    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-    templateBuf.cells.push({ col, row, type: 'image', url: null });
-  }
-
-  templateSelectedCell = { col, row };
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
   $('#te-prop-panel').innerHTML = renderTemplateProps();
   renderBoard();
 }
 
+/* ─── EGENSKAPSPANEL ─── */
 function renderTemplateProps() {
-  if (!templateSelectedCell) {
-    return `<div class="te-prop-empty">Klikk på en celle i kortet for å redigere innholdet.</div>`;
+  // Anker/koord-verktøy aktivt → vis info om hva neste klikk gjør
+  if (templateTool === 'anchor') {
+    const existing = templateBuf.overlays.find(o => o.type === 'anchor');
+    return `<div class="te-prop"><label>Anker-verktøy</label><div style="font-size:12px;color:var(--ink2);line-height:1.45;">Klikk i en grid-rute for å plassere anker.<br><br>${existing ? `Eksisterende anker: (${existing.col}, ${existing.row}). Nytt klikk flytter det.` : 'Ingen anker plassert ennå.'}</div></div>`;
   }
-  const { col, row } = templateSelectedCell;
-  const cell = templateBuf.cells.find(c => c.col === col && c.row === row);
-  if (!cell) {
-    return `<div class="te-prop-empty">Tom celle ved (${col}, ${row}).<br>Velg et verktøy og klikk for å plassere.</div>`;
+  if (templateTool === 'coord') {
+    const existing = templateBuf.overlays.find(o => o.type === 'coord');
+    let body = `<div class="te-prop"><label>Koordinat-verktøy</label><div style="font-size:12px;color:var(--ink2);line-height:1.45;">Klikk i en grid-rute for å plassere koord-symbol.<br><br>${existing ? `Symbolet er plassert på (${existing.col}, ${existing.row}).` : 'Ingen plassert ennå.'}</div>`;
+    if (existing) {
+      body += `<label style="margin-top:14px;">Peker mot koordinat</label>`;
+      const coords = scenarioBuf.scenario_data.coordinates || [];
+      body += `<select onchange="updateCoordOverlay(this.value)">`;
+      body += `<option value="">— Velg koordinat —</option>`;
+      coords.forEach(c => {
+        const sel = (existing.coord_x === c.x && existing.coord_y === c.y) ? 'selected' : '';
+        body += `<option value="${c.x},${c.y}" ${sel}>(${c.x}, ${c.y})${c.code ? ' · ' + escapeHtml(c.code) : ''}</option>`;
+      });
+      body += `</select>`;
+      body += `<button class="btn btn-sm btn-ghost" style="width:100%;margin-top:10px;" onclick="removeCoordOverlay()">Fjern koord-symbol</button>`;
+    } else if (templateBuf.overlays.find(o => o.type === 'anchor')) {
+      // Vis anker-info
+    }
+    body += `</div>`;
+    return body;
   }
 
-  let body = `<div class="te-prop"><label>Posisjon</label><div style="font-family:var(--font-mono);font-size:13px;color:var(--ink2);margin-bottom:10px;">Kolonne ${col}, rad ${row}</div>`;
+  // Select-verktøy: vis egenskaper for valgt zone/lag
+  if (templateSelectedZone === 'header') {
+    return renderHeaderProps();
+  }
+  if (templateSelectedZone === 'content') {
+    return renderContentProps();
+  }
+  if (templateSelectedZone === 'footer') {
+    return renderFooterProps();
+  }
+  return `<div class="te-prop-empty">Klikk på header, innhold eller footer for å redigere.<br><br>Eller velg <strong>Anker</strong>/<strong>Koordinat</strong>-verktøyet og klikk en grid-rute.</div>`;
+}
 
-  if (cell.type === 'anchor') {
-    body += `<label>Type</label><div>⚓ Anker</div><div style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.4;">Anker-cellen er kortets fysiske referansepunkt. Når kortet legges på Investigation Board, treffer denne cellen hovedrutenettet på en bestemt X,Y.</div>`;
-  } else if (cell.type === 'coord') {
-    const coords = scenarioBuf.scenario_data.coordinates || [];
-    body += `<label>Type</label><div>⊕ Koordinat-symbol</div>`;
-    body += `<label style="margin-top:10px;">Peker mot koordinat</label>`;
-    body += `<select onchange="updateTemplateCellCoord(this.value)">`;
-    body += `<option value="">— Velg koordinat —</option>`;
-    coords.forEach(c => {
-      const sel = (cell.coord_x === c.x && cell.coord_y === c.y) ? 'selected' : '';
-      body += `<option value="${c.x},${c.y}" ${sel}>(${c.x}, ${c.y}) ${c.code ? '· kode: ' + escapeHtml(c.code) : ''}</option>`;
-    });
-    body += `</select>`;
-    body += `<div style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.4;">Når deltageren skal taste inn koordinat-symbolet på dette kortet, taster de denne X,Y.</div>`;
-  } else if (cell.type === 'text') {
-    body += `<label>Tekst</label>`;
-    body += `<textarea rows="3" oninput="updateTemplateCellText(this.value)" placeholder="Tekst...">${escapeHtml(cell.text || '')}</textarea>`;
-  } else if (cell.type === 'image') {
-    body += `<label>Bilde i celle</label>`;
-    if (cell.url) {
-      body += `<img src="${escapeHtml(cell.thumb_url || cell.url)}" style="width:100%;border:1px solid var(--rule);border-radius:2px;margin-bottom:8px;">`;
-      body += `<button class="btn btn-sm btn-danger" style="width:100%;" onclick="removeTemplateCellImage()">Fjern bilde</button>`;
+function renderHeaderProps() {
+  const h = templateBuf.header;
+  return `
+    <div class="te-prop">
+      <label>HEADER</label>
+      <label style="margin-top:10px;">Tittel</label>
+      <input type="text" value="${escapeHtml(h.title || '')}" oninput="updateHeader('title', this.value)">
+      <label>4-tegns kode</label>
+      <input type="text" maxlength="6" value="${escapeHtml(h.code || '')}" oninput="updateHeader('code', this.value)">
+      <label>Bakgrunnsfarge</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="color" value="${h.bg_color}" oninput="updateHeader('bg_color', this.value)">
+        <input type="text" value="${h.bg_color}" oninput="updateHeader('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+      </div>
+      <label>Tekstfarge</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="color" value="${h.text_color}" oninput="updateHeader('text_color', this.value)">
+        <input type="text" value="${h.text_color}" oninput="updateHeader('text_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+      </div>
+      <label>Høyde (% av kortet)</label>
+      <input type="number" min="5" max="30" value="${h.height_pct}" oninput="updateHeader('height_pct', parseInt(this.value,10) || ${HEADER_DEFAULT_PCT})">
+    </div>
+  `;
+}
+
+function renderFooterProps() {
+  const f = templateBuf.footer;
+  let body = `
+    <div class="te-prop">
+      <label>FOOTER</label>
+      <label style="margin-top:10px;">Bakgrunnsfarge</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="color" value="${f.bg_color}" oninput="updateFooter('bg_color', this.value)">
+        <input type="text" value="${f.bg_color}" oninput="updateFooter('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+      </div>
+      <label>Tekstfarge</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="color" value="${f.text_color}" oninput="updateFooter('text_color', this.value)">
+        <input type="text" value="${f.text_color}" oninput="updateFooter('text_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+      </div>
+      <label>Høyde (% av kortet)</label>
+      <input type="number" min="5" max="30" value="${f.height_pct}" oninput="updateFooter('height_pct', parseInt(this.value,10) || ${FOOTER_DEFAULT_PCT})">
+
+      <label style="margin-top:14px;">Innhold</label>
+      <div id="te-footer-items">`;
+  (f.items || []).forEach((item, idx) => {
+    body += `<div class="te-footer-item-row">
+      <span style="font-size:18px;width:24px;text-align:center;">${item.type === 'symbol' ? escapeHtml(item.value) : 'T'}</span>
+      <input type="text" value="${escapeHtml(item.value || '')}" oninput="updateFooterItem(${idx}, this.value)" placeholder="${item.type === 'symbol' ? 'Symbol' : 'Tekst'}">
+      <button class="btn btn-sm btn-ghost" onclick="removeFooterItem(${idx})" style="padding:2px 6px;">✕</button>
+    </div>`;
+  });
+  body += `</div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <button class="btn btn-sm btn-secondary" onclick="addFooterItem('text')" style="flex:1;">+ Tekst</button>
+        <button class="btn btn-sm btn-secondary" onclick="toggleFooterSymbolPicker()" style="flex:1;">+ Symbol</button>
+      </div>
+      <div id="te-symbol-picker" style="display:none;">
+        <div class="te-symbol-grid">
+          ${FOOTER_SYMBOLS.map(s => `<button class="te-symbol-btn" onclick="addFooterItem('symbol', '${s}')">${s}</button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  return body;
+}
+
+function renderContentProps() {
+  const c = templateBuf.content;
+  let body = `
+    <div class="te-prop">
+      <label>INNHOLD</label>
+      <label style="margin-top:10px;">Bakgrunnsfarge</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="color" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)">
+        <input type="text" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+      </div>
+
+      <label style="margin-top:14px;">Lag (${(c.layers || []).length})</label>
+      <div>`;
+  (c.layers || []).forEach((layer, idx) => {
+    const sel = templateSelectedLayer === idx;
+    let thumb;
+    if (layer.type === 'image' && (layer.thumb_url || layer.url)) {
+      thumb = `<div class="te-layer-thumb" style="background-image:url('${escapeHtml(layer.thumb_url || layer.url)}');"></div>`;
+    } else if (layer.type === 'image') {
+      thumb = `<div class="te-layer-text-thumb">🖼</div>`;
     } else {
-      body += `<label class="bb-image-pad" style="margin-top:0;">`;
-      body += `<input type="file" accept="image/*" onchange="onTemplateCellImageUpload(this)">`;
-      body += `<div class="bb-image-pad-icon">⬆</div>`;
-      body += `<div class="bb-image-pad-text">Last opp bilde</div>`;
-      body += `</label>`;
+      thumb = `<div class="te-layer-text-thumb">T</div>`;
+    }
+    const name = layer.type === 'text' ? (layer.value || '(tom tekst)').slice(0, 18) : 'Bilde';
+    body += `<div class="te-layer-row${sel ? ' selected' : ''}" onclick="selectLayer(${idx})">
+      ${thumb}
+      <span class="layer-name">${escapeHtml(name)}</span>
+      <button class="btn btn-sm btn-ghost" style="padding:2px 4px;" onclick="event.stopPropagation();moveLayer(${idx}, -1)" title="Flytt opp">▲</button>
+      <button class="btn btn-sm btn-ghost" style="padding:2px 4px;" onclick="event.stopPropagation();moveLayer(${idx}, 1)" title="Flytt ned">▼</button>
+      <button class="btn btn-sm btn-ghost" style="padding:2px 4px;" onclick="event.stopPropagation();removeLayer(${idx})" title="Slett">✕</button>
+    </div>`;
+  });
+  body += `</div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <label class="btn btn-sm btn-secondary" style="flex:1;cursor:pointer;text-align:center;margin-bottom:0;">
+          <input type="file" accept="image/*" onchange="addImageLayer(this)" style="display:none;">+ Bildelag
+        </label>
+        <button class="btn btn-sm btn-secondary" onclick="addTextLayer()" style="flex:1;">+ Tekstlag</button>
+      </div>
+    </div>`;
+
+  // Hvis et lag er valgt, vis dets egenskaper
+  if (templateSelectedLayer >= 0) {
+    const layer = c.layers[templateSelectedLayer];
+    if (layer) {
+      body += renderLayerProps(layer, templateSelectedLayer);
     }
   }
+  return body;
+}
 
-  body += `<button class="btn btn-sm btn-ghost" style="width:100%;margin-top:12px;" onclick="deleteTemplateCell()">Slett denne cellen</button>`;
+function renderLayerProps(layer, idx) {
+  let body = `<div class="te-prop" style="margin-top:10px;"><label>Valgt lag</label>`;
+  body += `<label>X (%)</label><input type="number" min="0" max="100" step="1" value="${Math.round(layer.x_pct || 0)}" oninput="updateLayer(${idx}, 'x_pct', parseFloat(this.value))">`;
+  body += `<label>Y (%)</label><input type="number" min="0" max="100" step="1" value="${Math.round(layer.y_pct || 0)}" oninput="updateLayer(${idx}, 'y_pct', parseFloat(this.value))">`;
+  body += `<label>Bredde (%)</label><input type="number" min="5" max="100" step="1" value="${Math.round(layer.w_pct || 50)}" oninput="updateLayer(${idx}, 'w_pct', parseFloat(this.value))">`;
+  body += `<label>Høyde (%)</label><input type="number" min="5" max="100" step="1" value="${Math.round(layer.h_pct || 50)}" oninput="updateLayer(${idx}, 'h_pct', parseFloat(this.value))">`;
+  if (layer.type === 'text') {
+    body += `<label>Tekst</label><textarea rows="2" oninput="updateLayer(${idx}, 'value', this.value)">${escapeHtml(layer.value || '')}</textarea>`;
+    body += `<label>Skriftstørrelse</label><input type="number" min="8" max="80" value="${layer.font_size || 16}" oninput="updateLayer(${idx}, 'font_size', parseInt(this.value,10) || 16)">`;
+    body += `<label>Tekstfarge</label><div style="display:flex;gap:6px;"><input type="color" value="${layer.color || '#1a1610'}" oninput="updateLayer(${idx}, 'color', this.value)"><input type="text" value="${layer.color || '#1a1610'}" oninput="updateLayer(${idx}, 'color', this.value)" style="font-family:var(--font-mono);font-size:11px;"></div>`;
+    body += `<label>Bakgrunnsfarge</label><div style="display:flex;gap:6px;"><input type="color" value="${(layer.bg_color || '#ffffff') === 'transparent' ? '#ffffff' : layer.bg_color}" oninput="updateLayer(${idx}, 'bg_color', this.value)"><button class="btn btn-sm btn-ghost" onclick="updateLayer(${idx}, 'bg_color', 'transparent')">Transparent</button></div>`;
+  }
   body += `</div>`;
   return body;
 }
 
-function updateTemplateCellCoord(value) {
-  if (!templateSelectedCell) return;
-  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
-  if (!cell || cell.type !== 'coord') return;
+/* ─── EGENSKAP-OPPDATERING ─── */
+function updateHeader(field, value) {
+  templateBuf.header[field] = value;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  // Ikke render hele props-panelet — det stjeler input-fokus
+  renderBoard();
+}
+
+function updateFooter(field, value) {
+  templateBuf.footer[field] = value;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  renderBoard();
+}
+
+function updateContent(field, value) {
+  templateBuf.content[field] = value;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  renderBoard();
+}
+
+function addFooterItem(type, value) {
+  templateBuf.footer.items = templateBuf.footer.items || [];
+  templateBuf.footer.items.push({ type, value: value || '' });
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderFooterProps();
+  renderBoard();
+}
+
+function updateFooterItem(idx, value) {
+  if (!templateBuf.footer.items[idx]) return;
+  templateBuf.footer.items[idx].value = value;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  renderBoard();
+}
+
+function removeFooterItem(idx) {
+  templateBuf.footer.items.splice(idx, 1);
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderFooterProps();
+  renderBoard();
+}
+
+function toggleFooterSymbolPicker() {
+  const el = $('#te-symbol-picker');
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+/* ─── KOORD-OVERLAY-LINKING ─── */
+function updateCoordOverlay(value) {
+  const o = templateBuf.overlays.find(x => x.type === 'coord');
+  if (!o) return;
   if (!value) {
-    cell.coord_x = null;
-    cell.coord_y = null;
+    o.coord_x = null;
+    o.coord_y = null;
   } else {
     const [x, y] = value.split(',').map(Number);
-    cell.coord_x = x;
-    cell.coord_y = y;
+    o.coord_x = x;
+    o.coord_y = y;
   }
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
 }
 
-function updateTemplateCellText(text) {
-  if (!templateSelectedCell) return;
-  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
-  if (!cell || cell.type !== 'text') return;
-  cell.text = text;
+function removeCoordOverlay() {
+  templateBuf.overlays = templateBuf.overlays.filter(o => o.type !== 'coord');
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderTemplateProps();
+  renderBoard();
 }
 
-async function onTemplateCellImageUpload(input) {
+/* ─── LAG-HÅNDTERING (placeholder for del 2) ─── */
+function selectLayer(idx) {
+  templateSelectedLayer = idx;
+  templateSelectedZone = 'content';
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderContentProps();
+}
+
+function addTextLayer() {
+  templateBuf.content.layers = templateBuf.content.layers || [];
+  templateBuf.content.layers.push({
+    type: 'text',
+    value: 'Ny tekst',
+    font_size: 16,
+    color: '#1a1610',
+    bg_color: 'transparent',
+    x_pct: 25, y_pct: 35, w_pct: 50, h_pct: 30,
+  });
+  templateSelectedLayer = templateBuf.content.layers.length - 1;
+  templateSelectedZone = 'content';
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderContentProps();
+}
+
+async function addImageLayer(input) {
   const file = input.files[0];
-  if (!file || !templateSelectedCell) return;
+  if (!file) return;
   if (!state.currentScenarioId) {
     showToast('Lagre scenarioet først', 'error');
     return;
   }
-  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
-  if (!cell) return;
-
   try {
     showToast('Laster opp...', 'info');
     const result = await uploadImage(file, {
       scenario_id: state.currentScenarioId,
       kind: 'cards',
     });
-    cell.url = result.url;
-    cell.path = result.path;
-    cell.thumb_url = result.thumb_url || result.url;
-    cell.thumb_path = result.thumb_path || null;
+    templateBuf.content.layers = templateBuf.content.layers || [];
+    templateBuf.content.layers.push({
+      type: 'image',
+      url: result.url,
+      path: result.path,
+      thumb_url: result.thumb_url || result.url,
+      thumb_path: result.thumb_path || null,
+      x_pct: 10, y_pct: 10, w_pct: 80, h_pct: 70,
+    });
+    templateSelectedLayer = templateBuf.content.layers.length - 1;
+    templateSelectedZone = 'content';
     $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
-    $('#te-prop-panel').innerHTML = renderTemplateProps();
+    $('#te-prop-panel').innerHTML = renderContentProps();
     renderBoard();
-    showToast('Bildet er lastet opp', 'success');
+    showToast('Bildelag lagt til', 'success');
   } catch (e) {
     showToast('Opplasting feilet: ' + e.message, 'error');
   } finally {
@@ -2028,48 +2319,186 @@ async function onTemplateCellImageUpload(input) {
   }
 }
 
-async function removeTemplateCellImage() {
-  if (!templateSelectedCell) return;
-  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
-  if (!cell || cell.type !== 'image') return;
-  if (cell.path && cell.path.startsWith('/Escape Box/')) {
-    try { await deleteImage(cell.path, cell.url); }
-    catch (e) { console.warn('Kunne ikke slette bilde:', e.message); }
-  }
-  if (cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
-    try { await deleteImage(cell.thumb_path, cell.thumb_url); }
-    catch (e) { console.warn('Kunne ikke slette thumb:', e.message); }
-  }
-  cell.url = null;
-  cell.path = null;
-  cell.thumb_url = null;
-  cell.thumb_path = null;
+function updateLayer(idx, field, value) {
+  const layer = templateBuf.content.layers[idx];
+  if (!layer) return;
+  layer[field] = value;
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
-  $('#te-prop-panel').innerHTML = renderTemplateProps();
   renderBoard();
 }
 
-function deleteTemplateCell() {
-  if (!templateSelectedCell) return;
-  const { col, row } = templateSelectedCell;
-  const cell = templateBuf.cells.find(c => c.col === col && c.row === row);
-  if (cell?.type === 'image' && cell.path) {
-    // Beste prøving — slett bilde fra Dropbox
-    if (cell.path.startsWith('/Escape Box/')) {
-      deleteImage(cell.path, cell.url).catch(e => console.warn('Cleanup-feil:', e.message));
-    }
-    if (cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
-      deleteImage(cell.thumb_path, cell.thumb_url).catch(e => console.warn('Cleanup-feil:', e.message));
-    }
-  }
-  templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
-  templateSelectedCell = null;
+function moveLayer(idx, delta) {
+  const layers = templateBuf.content.layers;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= layers.length) return;
+  [layers[idx], layers[newIdx]] = [layers[newIdx], layers[idx]];
+  templateSelectedLayer = newIdx;
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
-  $('#te-prop-panel').innerHTML = renderTemplateProps();
+  $('#te-prop-panel').innerHTML = renderContentProps();
   renderBoard();
 }
 
-/* ─── FYSISKE KORT — drag, resize, upload ─── */
+async function removeLayer(idx) {
+  const layer = templateBuf.content.layers[idx];
+  if (!layer) return;
+  if (!confirm('Slett dette laget?')) return;
+  // Rydd Dropbox-bilder
+  if (layer.type === 'image' && layer.path?.startsWith('/Escape Box/')) {
+    try { await deleteImage(layer.path, layer.url); } catch (e) { /* ignore */ }
+    if (layer.thumb_path?.startsWith('/Escape Box/')) {
+      try { await deleteImage(layer.thumb_path, layer.thumb_url); } catch (e) { /* ignore */ }
+    }
+  }
+  templateBuf.content.layers.splice(idx, 1);
+  if (templateSelectedLayer === idx) templateSelectedLayer = -1;
+  else if (templateSelectedLayer > idx) templateSelectedLayer--;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderContentProps();
+  renderBoard();
+}
+
+/* ─── DRAG/RESIZE FOR CONTENT-LAG ─── */
+function onLayerMouseDown(e, layerIdx, mode = 'move') {
+  e.preventDefault();
+  e.stopPropagation();
+  if (templateTool !== 'select') return;
+
+  const layer = templateBuf.content.layers[layerIdx];
+  if (!layer) return;
+
+  templateSelectedLayer = layerIdx;
+  templateSelectedZone = 'content';
+
+  const { width, height } = getCardCanvasSize();
+  const headerH = (height * (templateBuf.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
+  const footerH = (height * (templateBuf.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
+  const contentH = height - headerH - footerH;
+
+  templateDrag = {
+    mode,
+    layerIdx,
+    startX: e.clientX,
+    startY: e.clientY,
+    origX: layer.x_pct || 0,
+    origY: layer.y_pct || 0,
+    origW: layer.w_pct || 50,
+    origH: layer.h_pct || 50,
+    pxW: width,
+    pxH: contentH,
+  };
+  document.addEventListener('mousemove', onLayerMouseMove);
+  document.addEventListener('mouseup', onLayerMouseUp);
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderContentProps();
+}
+
+function onLayerMouseMove(e) {
+  const drag = templateDrag;
+  if (!drag) return;
+  const layer = templateBuf.content.layers[drag.layerIdx];
+  if (!layer) return;
+
+  const dxPct = ((e.clientX - drag.startX) / drag.pxW) * 100;
+  const dyPct = ((e.clientY - drag.startY) / drag.pxH) * 100;
+
+  if (drag.mode === 'move') {
+    layer.x_pct = Math.max(0, Math.min(100 - (layer.w_pct || 50), drag.origX + dxPct));
+    layer.y_pct = Math.max(0, Math.min(100 - (layer.h_pct || 50), drag.origY + dyPct));
+  } else if (drag.mode === 'resize-se') {
+    layer.w_pct = Math.max(5, Math.min(100 - (layer.x_pct || 0), drag.origW + dxPct));
+    layer.h_pct = Math.max(5, Math.min(100 - (layer.y_pct || 0), drag.origH + dyPct));
+  }
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+}
+
+function onLayerMouseUp() {
+  templateDrag = null;
+  document.removeEventListener('mousemove', onLayerMouseMove);
+  document.removeEventListener('mouseup', onLayerMouseUp);
+  // Oppdater også egenskapspanelet med nye verdier
+  $('#te-prop-panel').innerHTML = renderContentProps();
+  renderBoard();
+}
+
+/* ─── RENDER PÅ INVESTIGATION BOARD ─── */
+function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
+  ensureTemplateShape(card);
+  const headerH = (ch * (card.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
+  const footerH = (ch * (card.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
+  const contentY = cy + headerH;
+  const contentH = ch - headerH - footerH;
+  const cellW = cw / card.cols;
+  const cellH = ch / card.rows;
+  let s = '';
+
+  // Content-bakgrunn
+  s += `<rect x="${cx}" y="${contentY}" width="${cw}" height="${contentH}" fill="${card.content.bg_color}" pointer-events="none"/>`;
+
+  // Content-lag
+  (card.content.layers || []).forEach(layer => {
+    const lx = cx + (layer.x_pct || 0) * cw / 100;
+    const ly = contentY + (layer.y_pct || 0) * contentH / 100;
+    const lw = (layer.w_pct || 50) * cw / 100;
+    const lh = (layer.h_pct || 50) * contentH / 100;
+    if (layer.type === 'image' && (layer.thumb_url || layer.url)) {
+      s += `<image href="${escapeHtml(layer.thumb_url || layer.url)}" x="${lx}" y="${ly}" width="${lw}" height="${lh}" preserveAspectRatio="xMidYMid meet" pointer-events="none"/>`;
+    } else if (layer.type === 'text') {
+      const fz = Math.max(6, (layer.font_size || 16) * (cw / 300));
+      const txt = (layer.value || '').slice(0, 60);
+      if (layer.bg_color && layer.bg_color !== 'transparent') {
+        s += `<rect x="${lx}" y="${ly}" width="${lw}" height="${lh}" fill="${layer.bg_color}" pointer-events="none"/>`;
+      }
+      s += `<text x="${lx + lw/2}" y="${ly + lh/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${fz}" fill="${layer.color || '#1a1610'}" pointer-events="none">${escapeHtml(txt)}</text>`;
+    }
+  });
+
+  // Header
+  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${headerH}" fill="${card.header.bg_color}" pointer-events="none"/>`;
+  const headerFz = Math.max(7, headerH * 0.42);
+  s += `<text x="${cx + cw * 0.08}" y="${cy + headerH/2}" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
+  s += `<text x="${cx + cw * 0.92}" y="${cy + headerH/2}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="${headerFz * 0.85}" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.code || '').slice(0, 6))}</text>`;
+
+  // Footer
+  const fy = cy + ch - footerH;
+  s += `<rect x="${cx}" y="${fy}" width="${cw}" height="${footerH}" fill="${card.footer.bg_color}" pointer-events="none"/>`;
+  const footerFz = Math.max(6, footerH * 0.45);
+  let fx = cx + cw * 0.08;
+  (card.footer.items || []).forEach(item => {
+    const txt = item.value || '';
+    s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${item.type === 'symbol' ? footerFz * 1.2 : footerFz}" fill="${card.footer.text_color}" pointer-events="none">${escapeHtml(txt)}</text>`;
+    fx += (item.type === 'symbol' ? footerFz * 1.5 : (txt.length * footerFz * 0.55)) + 6;
+  });
+
+  // Grid-stiplet på toppen
+  for (let r = 1; r < card.rows; r++) {
+    s += `<line x1="${cx}" y1="${cy + r*cellH}" x2="${cx + cw}" y2="${cy + r*cellH}" stroke="rgba(60,40,20,0.28)" stroke-width="0.5" stroke-dasharray="2 2" pointer-events="none"/>`;
+  }
+  for (let c = 1; c < card.cols; c++) {
+    s += `<line x1="${cx + c*cellW}" y1="${cy}" x2="${cx + c*cellW}" y2="${cy + ch}" stroke="rgba(60,40,20,0.28)" stroke-width="0.5" stroke-dasharray="2 2" pointer-events="none"/>`;
+  }
+
+  // Anker / koord-symbol (oppå alt)
+  (card.overlays || []).forEach(o => {
+    const ox = cx + o.col * cellW + cellW/2;
+    const oy = cy + o.row * cellH + cellH/2;
+    const r = Math.min(cellW, cellH) * 0.32;
+    if (o.type === 'anchor') {
+      s += `<circle cx="${ox}" cy="${oy}" r="${r}" fill="rgba(184,50,40,0.85)" pointer-events="none"/>`;
+      s += `<text x="${ox}" y="${oy}" text-anchor="middle" dominant-baseline="middle" font-size="${r * 1.1}" fill="#fff" font-weight="700" pointer-events="none">⚓</text>`;
+    } else if (o.type === 'coord') {
+      s += `<circle cx="${ox}" cy="${oy}" r="${r}" fill="rgba(26,74,122,0.85)" pointer-events="none"/>`;
+      s += `<text x="${ox}" y="${oy - r * 0.05}" text-anchor="middle" dominant-baseline="middle" font-size="${r * 1.0}" fill="#fff" font-weight="700" pointer-events="none">⊕</text>`;
+    }
+  });
+
+  // Ramme (drabar)
+  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}" style="cursor:move;"/>`;
+
+  return s;
+}
+
+
+/* ─── FYSISKE KORT (bilde-kort) — drag, resize, upload ─── */
 async function onCardImageUpload(input) {
   const file = input.files[0];
   if (!file) return;
