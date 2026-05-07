@@ -1633,9 +1633,22 @@ let templateSelectedLayer = -1;     // index i content.layers, eller -1
 let templateSelectedFooterItem = -1;
 let templateDrag = null;            // { mode, layerIdx, startX, startY, orig... }
 
-// Hvor mange prosent av kortet header/footer tar
-const HEADER_DEFAULT_PCT = 12;
-const FOOTER_DEFAULT_PCT = 10;
+// Hvor mange grid-rader header/footer tar (en rute hver = 1)
+const HEADER_DEFAULT_ROWS = 1;
+const FOOTER_DEFAULT_ROWS = 1;
+
+// Forhåndsdefinerte fargesvatcher fra Field Terminal-malen
+// Brukes som palett i fargevelgeren for header/footer
+const FIELD_TERMINAL_COLORS = [
+  { name: 'Blå',     value: '#1a4a7a' },
+  { name: 'Rød',     value: '#b83228' },
+  { name: 'Gull',    value: '#c8961a' },
+  { name: 'Stamp',   value: '#8b3a2a' },
+  { name: 'Grønn',   value: '#2a6b3c' },
+  { name: 'Mørk',    value: '#1a1610' },
+  { name: 'Papir',   value: '#faf8f3' },
+  { name: 'Sand',    value: '#ede8dc' },
+];
 
 // Symbolutvalg for footer
 const FOOTER_SYMBOLS = ['🔒','🔑','⚠','☢','⛔','📁','📎','🔍','🚨','★','◆','●','✦','✱','⚙','🎯','🧩','📌'];
@@ -1650,16 +1663,31 @@ function ensureTemplateShape(card) {
       code: '',
       bg_color: '#1a4a7a',
       text_color: '#ffffff',
-      height_pct: HEADER_DEFAULT_PCT,
+      code_bg_color: '#c8961a',
+      code_text_color: '#1a1610',
+      rows: HEADER_DEFAULT_ROWS,
     };
   }
+  // Migrer eldre header med height_pct → rows
+  if (card.header.height_pct != null && card.header.rows == null) {
+    card.header.rows = HEADER_DEFAULT_ROWS;
+    delete card.header.height_pct;
+  }
+  // Sett standard kode-styling for eldre kort som mangler dem
+  if (card.header.code_bg_color == null) card.header.code_bg_color = '#c8961a';
+  if (card.header.code_text_color == null) card.header.code_text_color = '#1a1610';
+
   if (!card.footer) {
     card.footer = {
       items: [],
       bg_color: '#ede8dc',
       text_color: '#1a1610',
-      height_pct: FOOTER_DEFAULT_PCT,
+      rows: FOOTER_DEFAULT_ROWS,
     };
+  }
+  if (card.footer.height_pct != null && card.footer.rows == null) {
+    card.footer.rows = FOOTER_DEFAULT_ROWS;
+    delete card.footer.height_pct;
   }
   if (!card.content) {
     card.content = {
@@ -1735,9 +1763,30 @@ function openTemplateEditor(cardId) {
     size: 'xl',
     body: renderTemplateEditor(),
     footer: `
-      <button class="btn btn-secondary" onclick="closeTemplateEditor()">⤺ Tilbake til scenario</button>
+      <button class="btn btn-secondary" onclick="closeTemplateEditor()">⤺ Tilbake</button>
+      <button class="btn btn-success" onclick="saveTemplateCardOnly()">⤳ Lagre kort</button>
     `,
   });
+}
+
+/* Lagrer hele scenarioet til backend uten å lukke editoren.
+   Brukes når du jobber lenge i kort-editoren og vil lagre underveis
+   uten å miste plassen.
+*/
+async function saveTemplateCardOnly() {
+  if (!state.currentScenarioId) {
+    showToast('Ingen scenario åpen', 'error');
+    return;
+  }
+  try {
+    await api(`/api/scenarios/${state.currentScenarioId}`, {
+      method: 'PATCH',
+      body: { scenario_data: scenarioBuf.scenario_data },
+    });
+    showToast('Kortet er lagret', 'success');
+  } catch (e) {
+    showToast('Lagring feilet: ' + e.message, 'error');
+  }
 }
 
 function renderTemplateEditor() {
@@ -1895,8 +1944,10 @@ function getCardCanvasSize() {
 
 function renderTemplateCanvas() {
   const { cellPx, width, height } = getCardCanvasSize();
-  const headerH = (height * (templateBuf.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
-  const footerH = (height * (templateBuf.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
+  const headerRows = templateBuf.header.rows || HEADER_DEFAULT_ROWS;
+  const footerRows = templateBuf.footer.rows || FOOTER_DEFAULT_ROWS;
+  const headerH = headerRows * cellPx;
+  const footerH = footerRows * cellPx;
   const contentY = headerH;
   const contentH = height - headerH - footerH;
 
@@ -1934,10 +1985,15 @@ function renderTemplateCanvas() {
   });
   html += `</div>`;
 
-  // HEADER-sone
+  // HEADER-sone — 4-kode med egen kontrastfarget boks til høyre
   html += `<div class="te-zone te-zone-header${templateSelectedZone === 'header' ? ' selected' : ''}" style="height:${headerH}px;background:${templateBuf.header.bg_color};color:${templateBuf.header.text_color};" onclick="selectTemplateZone(event, 'header')">`;
   html += `<span class="te-header-title" style="font-size:${headerFontSize}px;">${escapeHtml(templateBuf.header.title || '')}</span>`;
-  html += `<span class="te-header-code" style="font-size:${headerFontSize * 0.85}px;">${escapeHtml(templateBuf.header.code || '')}</span>`;
+  // 4-kode i tydelig markert boks med egen bakgrunn
+  if (templateBuf.header.code) {
+    html += `<span class="te-header-code-badge" style="background:${templateBuf.header.code_bg_color};color:${templateBuf.header.code_text_color};font-size:${headerFontSize * 0.78}px;padding:${headerFontSize * 0.15}px ${headerFontSize * 0.5}px;border-radius:3px;font-family:var(--font-mono);font-weight:700;letter-spacing:0.12em;border:1px solid rgba(0,0,0,0.2);">${escapeHtml(templateBuf.header.code)}</span>`;
+  } else {
+    html += `<span class="te-header-code-badge" style="opacity:0.4;font-size:${headerFontSize * 0.78}px;padding:${headerFontSize * 0.15}px ${headerFontSize * 0.5}px;border:1px dashed currentColor;border-radius:3px;font-family:var(--font-mono);">CODE</span>`;
+  }
   html += `</div>`;
 
   // FOOTER-sone
@@ -1964,7 +2020,7 @@ function renderTemplateCanvas() {
     }
   }
   // Anker- og koord-markører (oppå alt)
-  (templateBuf.overlays || []).forEach((o, oIdx) => {
+  (templateBuf.overlays || []).forEach(o => {
     const x = o.col * cellPx + cellPx / 2;
     const y = o.row * cellPx + cellPx / 2;
     if (o.type === 'anchor') {
@@ -2066,19 +2122,22 @@ function renderHeaderProps() {
       <label style="margin-top:10px;">Tittel</label>
       <input type="text" value="${escapeHtml(h.title || '')}" oninput="updateHeader('title', this.value)">
       <label>4-tegns kode</label>
-      <input type="text" maxlength="6" value="${escapeHtml(h.code || '')}" oninput="updateHeader('code', this.value)">
-      <label>Bakgrunnsfarge</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input type="color" value="${h.bg_color}" oninput="updateHeader('bg_color', this.value)">
-        <input type="text" value="${h.bg_color}" oninput="updateHeader('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
-      </div>
+      <input type="text" maxlength="6" value="${escapeHtml(h.code || '')}" oninput="updateHeader('code', this.value)" placeholder="F.eks. 1A2B" style="font-family:var(--font-mono);letter-spacing:0.1em;">
+
+      <label style="margin-top:14px;">Bakgrunnsfarge (header)</label>
+      ${renderColorPalette('bg_color', h.bg_color, 'updateHeader')}
+
       <label>Tekstfarge</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input type="color" value="${h.text_color}" oninput="updateHeader('text_color', this.value)">
-        <input type="text" value="${h.text_color}" oninput="updateHeader('text_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
-      </div>
-      <label>Høyde (% av kortet)</label>
-      <input type="number" min="5" max="30" value="${h.height_pct}" oninput="updateHeader('height_pct', parseInt(this.value,10) || ${HEADER_DEFAULT_PCT})">
+      ${renderColorPalette('text_color', h.text_color, 'updateHeader')}
+
+      <label style="margin-top:14px;">4-kode bakgrunn</label>
+      ${renderColorPalette('code_bg_color', h.code_bg_color, 'updateHeader')}
+
+      <label>4-kode tekstfarge</label>
+      ${renderColorPalette('code_text_color', h.code_text_color, 'updateHeader')}
+
+      <label style="margin-top:14px;">Høyde (antall rader)</label>
+      <input type="number" min="1" max="3" value="${h.rows || HEADER_DEFAULT_ROWS}" oninput="updateHeader('rows', parseInt(this.value,10) || ${HEADER_DEFAULT_ROWS})">
     </div>
   `;
 }
@@ -2089,17 +2148,13 @@ function renderFooterProps() {
     <div class="te-prop">
       <label>FOOTER</label>
       <label style="margin-top:10px;">Bakgrunnsfarge</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input type="color" value="${f.bg_color}" oninput="updateFooter('bg_color', this.value)">
-        <input type="text" value="${f.bg_color}" oninput="updateFooter('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
-      </div>
+      ${renderColorPalette('bg_color', f.bg_color, 'updateFooter')}
+
       <label>Tekstfarge</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input type="color" value="${f.text_color}" oninput="updateFooter('text_color', this.value)">
-        <input type="text" value="${f.text_color}" oninput="updateFooter('text_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
-      </div>
-      <label>Høyde (% av kortet)</label>
-      <input type="number" min="5" max="30" value="${f.height_pct}" oninput="updateFooter('height_pct', parseInt(this.value,10) || ${FOOTER_DEFAULT_PCT})">
+      ${renderColorPalette('text_color', f.text_color, 'updateFooter')}
+
+      <label>Høyde (antall rader)</label>
+      <input type="number" min="1" max="3" value="${f.rows || FOOTER_DEFAULT_ROWS}" oninput="updateFooter('rows', parseInt(this.value,10) || ${FOOTER_DEFAULT_ROWS})">
 
       <label style="margin-top:14px;">Innhold</label>
       <div id="te-footer-items">`;
@@ -2122,6 +2177,21 @@ function renderFooterProps() {
       </div>
     </div>`;
   return body;
+}
+
+/* Felles fargevelger med palett + tilpasset hex-input */
+function renderColorPalette(field, currentValue, updateFn) {
+  const swatches = FIELD_TERMINAL_COLORS.map(c => {
+    const sel = (c.value.toLowerCase() === (currentValue || '').toLowerCase()) ? 'border:2px solid var(--ink);' : 'border:1px solid var(--rule);';
+    return `<button title="${c.name}" style="width:24px;height:24px;${sel}background:${c.value};border-radius:3px;cursor:pointer;padding:0;" onclick="${updateFn}('${field}', '${c.value}')"></button>`;
+  }).join('');
+  return `
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">${swatches}</div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input type="color" value="${currentValue || '#000000'}" oninput="${updateFn}('${field}', this.value)" style="width:40px;height:28px;padding:1px;cursor:pointer;">
+      <input type="text" value="${currentValue || ''}" oninput="${updateFn}('${field}', this.value)" style="flex:1;font-family:var(--font-mono);font-size:11px;">
+    </div>
+  `;
 }
 
 function renderContentProps() {
@@ -2369,9 +2439,9 @@ function onLayerMouseDown(e, layerIdx, mode = 'move') {
   templateSelectedLayer = layerIdx;
   templateSelectedZone = 'content';
 
-  const { width, height } = getCardCanvasSize();
-  const headerH = (height * (templateBuf.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
-  const footerH = (height * (templateBuf.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
+  const { cellPx, width, height } = getCardCanvasSize();
+  const headerH = (templateBuf.header.rows || HEADER_DEFAULT_ROWS) * cellPx;
+  const footerH = (templateBuf.footer.rows || FOOTER_DEFAULT_ROWS) * cellPx;
   const contentH = height - headerH - footerH;
 
   templateDrag = {
@@ -2423,12 +2493,14 @@ function onLayerMouseUp() {
 /* ─── RENDER PÅ INVESTIGATION BOARD ─── */
 function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
   ensureTemplateShape(card);
-  const headerH = (ch * (card.header.height_pct || HEADER_DEFAULT_PCT)) / 100;
-  const footerH = (ch * (card.footer.height_pct || FOOTER_DEFAULT_PCT)) / 100;
-  const contentY = cy + headerH;
-  const contentH = ch - headerH - footerH;
   const cellW = cw / card.cols;
   const cellH = ch / card.rows;
+  const headerRows = card.header.rows || HEADER_DEFAULT_ROWS;
+  const footerRows = card.footer.rows || FOOTER_DEFAULT_ROWS;
+  const headerH = headerRows * cellH;
+  const footerH = footerRows * cellH;
+  const contentY = cy + headerH;
+  const contentH = ch - headerH - footerH;
   let s = '';
 
   // Content-bakgrunn
@@ -2455,14 +2527,26 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
   // Header
   s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${headerH}" fill="${card.header.bg_color}" pointer-events="none"/>`;
   const headerFz = Math.max(7, headerH * 0.42);
-  s += `<text x="${cx + cw * 0.08}" y="${cy + headerH/2}" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
-  s += `<text x="${cx + cw * 0.92}" y="${cy + headerH/2}" text-anchor="end" dominant-baseline="middle" font-family="var(--font-mono)" font-size="${headerFz * 0.85}" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.code || '').slice(0, 6))}</text>`;
+  s += `<text x="${cx + cw * 0.06}" y="${cy + headerH/2}" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
+  // 4-kode i markert badge
+  if (card.header.code) {
+    const codeFz = headerFz * 0.78;
+    const padX = codeFz * 0.5;
+    const padY = codeFz * 0.15;
+    const codeText = (card.header.code || '').slice(0, 6);
+    const codeWidth = codeText.length * codeFz * 0.65 + padX * 2;
+    const codeHeight = codeFz + padY * 2;
+    const codeX = cx + cw * 0.94 - codeWidth;
+    const codeY = cy + headerH/2 - codeHeight/2;
+    s += `<rect x="${codeX}" y="${codeY}" width="${codeWidth}" height="${codeHeight}" fill="${card.header.code_bg_color || '#c8961a'}" stroke="rgba(0,0,0,0.2)" stroke-width="0.5" rx="2" pointer-events="none"/>`;
+    s += `<text x="${codeX + codeWidth/2}" y="${cy + headerH/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-mono)" font-size="${codeFz}" font-weight="700" fill="${card.header.code_text_color || '#1a1610'}" pointer-events="none">${escapeHtml(codeText)}</text>`;
+  }
 
   // Footer
   const fy = cy + ch - footerH;
   s += `<rect x="${cx}" y="${fy}" width="${cw}" height="${footerH}" fill="${card.footer.bg_color}" pointer-events="none"/>`;
   const footerFz = Math.max(6, footerH * 0.45);
-  let fx = cx + cw * 0.08;
+  let fx = cx + cw * 0.06;
   (card.footer.items || []).forEach(item => {
     const txt = item.value || '';
     s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${item.type === 'symbol' ? footerFz * 1.2 : footerFz}" fill="${card.footer.text_color}" pointer-events="none">${escapeHtml(txt)}</text>`;
