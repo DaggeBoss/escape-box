@@ -1600,6 +1600,7 @@ function getBoardAnchors() {
   const anchors = [];
   cards.forEach(card => {
     if (card.type !== 'template') return;
+    if (card.in_stash) return;  // bunke-kort har ingen plass på board
     const anchorOverlay = (card.overlays || []).find(o => o.type === 'anchor');
     if (!anchorOverlay) return;
     anchors.push({
@@ -1674,6 +1675,7 @@ function syncCoordsFromCards() {
 
   sd.physical_cards.forEach(card => {
     if (card.type !== 'template') return;
+    if (card.in_stash) return;  // bunke-kort genererer ikke koordinater
     if (!Array.isArray(card.overlays)) return;
     const coordOverlay = card.overlays.find(o => o.type === 'coord');
     if (!coordOverlay) return;
@@ -1718,36 +1720,71 @@ function renderBoard() {
   syncCoordsFromCards();
   const g = scenarioBuf.scenario_data.grid;
   const cs = g.cell_size;
-  const W = g.x * cs;
-  const H = g.y * cs;
+  const showLabels = g.show_labels !== false;
+  // Akse-margin: plass til kolonne- og rad-overskrifter rundt gridet
+  const M = showLabels ? Math.max(22, Math.round(cs * 0.5)) : 0;
+  const innerW = g.x * cs;
+  const innerH = g.y * cs;
+  const W = innerW + M * 2;
+  const H = innerH + M * 2;
   const coordsByXY = {};
   scenarioBuf.scenario_data.coordinates.forEach((c, i) => {
     coordsByXY[`${c.x},${c.y}`] = i;
   });
 
-  // Bygg SVG
+  // Bygg SVG. Hele grid-rendering forskyves med (M, M) slik at akse-overskriftene
+  // kan plasseres i marginen rundt.
   let svg = `<svg class="board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
 
-  // Bakgrunn
+  // Bakgrunn (papir)
   svg += `<rect width="${W}" height="${H}" fill="#fbfaf6"/>`;
 
-  // Ruter
+  // Akse-bakgrunn (litt m\u00f8rkere) for ramme-effekten
+  if (showLabels) {
+    svg += `<rect x="0" y="0" width="${W}" height="${M}" fill="#f0eadb"/>`;
+    svg += `<rect x="0" y="${H - M}" width="${W}" height="${M}" fill="#f0eadb"/>`;
+    svg += `<rect x="0" y="0" width="${M}" height="${H}" fill="#f0eadb"/>`;
+    svg += `<rect x="${W - M}" y="0" width="${M}" height="${H}" fill="#f0eadb"/>`;
+
+    // Kolonne-overskrifter (X) — \u00f8verst og nederst
+    const colFz = Math.max(10, Math.min(16, cs * 0.32));
+    for (let x = 0; x < g.x; x++) {
+      const px = M + x * cs + cs / 2;
+      svg += `<text x="${px}" y="${M / 2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, var(--font-mono)" font-size="${colFz}" font-weight="700" fill="var(--ink)">${x}</text>`;
+      svg += `<text x="${px}" y="${H - M / 2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, var(--font-mono)" font-size="${colFz}" font-weight="700" fill="var(--ink)">${x}</text>`;
+    }
+    // Rad-overskrifter (Y) — venstre og h\u00f8yre
+    for (let y = 0; y < g.y; y++) {
+      const py = M + y * cs + cs / 2;
+      svg += `<text x="${M / 2}" y="${py}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, var(--font-mono)" font-size="${colFz}" font-weight="700" fill="var(--ink)">${y}</text>`;
+      svg += `<text x="${W - M / 2}" y="${py}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, var(--font-mono)" font-size="${colFz}" font-weight="700" fill="var(--ink)">${y}</text>`;
+    }
+    // Linjer rundt aksene
+    svg += `<line x1="0" y1="${M}" x2="${W}" y2="${M}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    svg += `<line x1="0" y1="${H - M}" x2="${W}" y2="${H - M}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    svg += `<line x1="${M}" y1="0" x2="${M}" y2="${H}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    svg += `<line x1="${W - M}" y1="0" x2="${W - M}" y2="${H}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+  }
+
+  // Hele grid-omr\u00e5det wrappes i en <g> som forskyves
+  svg += `<g transform="translate(${M},${M})">`;
+
+  // Inner-bakgrunn
+  svg += `<rect width="${innerW}" height="${innerH}" fill="#fbfaf6"/>`;
+
+  // Ruter (uten tall i hver — nå har vi akser i marginen)
   for (let y = 0; y < g.y; y++) {
     for (let x = 0; x < g.x; x++) {
       const has = (`${x},${y}` in coordsByXY);
       const sel = boardState.selectedCoord && boardState.selectedCoord.x === x && boardState.selectedCoord.y === y;
       const cls = `board-cell-rect${has ? ' has-coord' : ''}${sel ? ' selected' : ''}`;
       svg += `<rect class="${cls}" x="${x*cs}" y="${y*cs}" width="${cs}" height="${cs}" data-x="${x}" data-y="${y}" onclick="onCellClick(${x},${y})"/>`;
-      if (g.show_labels) {
-        const fontSize = Math.max(8, Math.min(14, cs * 0.22));
-        const lblCls = `board-cell-label${has ? ' has-coord' : ''}`;
-        svg += `<text class="${lblCls}" x="${x*cs + cs/2}" y="${y*cs + cs/2}" font-size="${fontSize}">${x},${y}</text>`;
-      }
     }
   }
 
   // Fysiske kort på toppen
   scenarioBuf.scenario_data.physical_cards.forEach(card => {
+    if (card.in_stash) return;  // bunke-kort vises ikke p\u00e5 board
     const cx = card.grid_x * cs;
     const cy = card.grid_y * cs;
     const cw = card.grid_w * cs;
@@ -1822,6 +1859,7 @@ function renderBoard() {
     svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${labelR * 1.3}" font-weight="700" fill="#fff" pointer-events="none">${escapeHtml(a.label)}</text>`;
   });
 
+  svg += `</g>`;  // lukker grid-wrapper-gruppen
   svg += `</svg>`;
   wrap.innerHTML = svg;
 
@@ -1916,32 +1954,97 @@ function renderCardsList() {
   const el = $('#bb-cards-list');
   if (!el) return;
   const cards = scenarioBuf.scenario_data.physical_cards;
-  if (cards.length === 0) {
-    el.innerHTML = '<div class="muted" style="font-size:11px;font-style:italic;padding:6px 0;">Ingen fysiske kort lastet opp ennå.</div>';
-    return;
-  }
-  el.innerHTML = cards.map(c => {
-    const thumbSrc = c.thumb_url || c.image_url || c.image_path;
+  const boardCards = cards.filter(c => !c.in_stash);
+  const stashCards = cards.filter(c => c.in_stash);
+
+  const renderItem = (c, inStash) => {
+    const thumbSrc = c.thumb_url || c.image_url || c.image_path || c.export_url;
     const isTemplate = c.type === 'template';
     const thumbStyle = thumbSrc && !c.uploading
       ? `background-image:url('${escapeHtml(thumbSrc)}');background-size:cover;background-position:center;`
       : '';
     const statusBadge = c.uploading
-      ? `<span style="font-size:10px;color:var(--amber);">⟳ ${Math.round((c.progress || 0) * 100)}%</span>`
-      : (isTemplate ? `<span style="font-size:10px;color:var(--blue);">${c.cells?.length || 0} elementer</span>` : '');
-    const editBtn = isTemplate
-      ? `<button class="btn btn-sm btn-secondary" style="padding:2px 6px;" onclick="event.stopPropagation();openTemplateEditor('${c.id}')">✎</button>`
+      ? `<span style="font-size:10px;color:var(--amber);">\u27f3 ${Math.round((c.progress || 0) * 100)}%</span>`
       : '';
+    const editBtn = isTemplate
+      ? `<button class="btn btn-sm btn-secondary" style="padding:2px 6px;" onclick="event.stopPropagation();openTemplateEditor('${c.id}')" title="Rediger">\u270e</button>`
+      : '';
+    const stashBtn = inStash
+      ? `<button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();moveCardToBoard('${c.id}')" title="Flytt til board">\u21e8</button>`
+      : `<button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();moveCardToStash('${c.id}')" title="Flytt til bunke">\u22ee</button>`;
+    const posInfo = inStash ? '<span style="font-size:10px;color:var(--ink3);">bunke</span>' : `<div class="bb-card-pos">${c.grid_x},${c.grid_y}</div>`;
     return `
-    <div class="bb-card-item ${boardState.selectedCard === c.id ? 'selected' : ''}" onclick="selectCard('${c.id}')">
-      <div class="bb-card-thumb" style="${thumbStyle}${isTemplate && !thumbSrc ? 'background:linear-gradient(135deg,#faf8f3,#ede8dc);display:flex;align-items:center;justify-content:center;' : ''}">${isTemplate && !thumbSrc ? `<span style="font-size:18px;color:var(--ink3);">▦</span>` : ''}</div>
-      <div class="bb-card-name">${escapeHtml(c.name)} ${statusBadge}</div>
-      <div class="bb-card-pos">${c.grid_x},${c.grid_y}</div>
-      ${editBtn}
-      <button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();removeCard('${c.id}')">✕</button>
-    </div>
-  `;
-  }).join('');
+      <div class="bb-card-item ${boardState.selectedCard === c.id ? 'selected' : ''}" onclick="selectCard('${c.id}')">
+        <div class="bb-card-thumb" style="${thumbStyle}${isTemplate && !thumbSrc ? 'background:linear-gradient(135deg,#faf8f3,#ede8dc);display:flex;align-items:center;justify-content:center;' : ''}">${isTemplate && !thumbSrc ? `<span style="font-size:18px;color:var(--ink3);">\u25a6</span>` : ''}</div>
+        <div class="bb-card-name">${escapeHtml(c.name)} ${statusBadge}</div>
+        ${posInfo}
+        ${editBtn}
+        ${stashBtn}
+        <button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();removeCard('${c.id}')" title="Slett">\u2715</button>
+      </div>
+    `;
+  };
+
+  let html = '';
+  // Seksjon 1: kort p\u00e5 board
+  html += `<div style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink3);margin:8px 0 4px;">P\u00e5 board (${boardCards.length})</div>`;
+  if (boardCards.length === 0) {
+    html += '<div class="muted" style="font-size:11px;font-style:italic;padding:4px 0;">Ingen kort p\u00e5 boarden.</div>';
+  } else {
+    html += boardCards.map(c => renderItem(c, false)).join('');
+  }
+
+  // Seksjon 2: bunke
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;">`;
+  html += `<span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink3);">Bunke (${stashCards.length})</span>`;
+  html += `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:10px;" onclick="createStashCard()">+ Nytt</button>`;
+  html += `</div>`;
+  if (stashCards.length === 0) {
+    html += '<div class="muted" style="font-size:11px;font-style:italic;padding:4px 0;">Ingen kort i bunken.</div>';
+  } else {
+    html += stashCards.map(c => renderItem(c, true)).join('');
+  }
+
+  el.innerHTML = html;
+}
+
+function moveCardToStash(cardId) {
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
+  if (!card) return;
+  card.in_stash = true;
+  renderBoard();
+}
+
+function moveCardToBoard(cardId) {
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
+  if (!card) return;
+  delete card.in_stash;
+  // Sett standard plassering hvis kortet er nytt fra bunke
+  if (card.grid_x == null) card.grid_x = 0;
+  if (card.grid_y == null) card.grid_y = 0;
+  renderBoard();
+}
+
+function createStashCard() {
+  const id = 'card_' + Date.now();
+  const card = {
+    id,
+    type: 'template',
+    name: 'Nytt kort i bunke',
+    cols: 5,
+    rows: 7,
+    in_stash: true,
+    grid_x: 0,
+    grid_y: 0,
+    grid_w: 5,
+    grid_h: 7,
+  };
+  ensureTemplateShape(card);
+  const suggestions = getContentColorSuggestions(card.header.bg_color);
+  if (suggestions.length > 0) card.content.bg_color = suggestions[0].value;
+  scenarioBuf.scenario_data.physical_cards.push(card);
+  boardState.selectedCard = id;
+  openTemplateEditor(id);
 }
 
 function renderMiniCoordList() {
@@ -3242,33 +3345,58 @@ function renderBoardForExport() {
   const sd = scenarioBuf.scenario_data;
   const g = sd.grid;
   const cs = g.cell_size;
-  const W = g.x * cs;
-  const H = g.y * cs;
+  const showLabels = g.show_labels !== false;
+  const M = showLabels ? Math.max(22, Math.round(cs * 0.5)) : 0;
+  const innerW = g.x * cs;
+  const innerH = g.y * cs;
+  const W = innerW + M * 2;
+  const H = innerH + M * 2;
 
   let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
 
   // Bakgrunn
   s += `<rect x="0" y="0" width="${W}" height="${H}" fill="#fbfaf6"/>`;
 
-  // Grid-celler
+  // Akse-bakgrunn + overskrifter
+  if (showLabels) {
+    s += `<rect x="0" y="0" width="${W}" height="${M}" fill="#f0eadb"/>`;
+    s += `<rect x="0" y="${H - M}" width="${W}" height="${M}" fill="#f0eadb"/>`;
+    s += `<rect x="0" y="0" width="${M}" height="${H}" fill="#f0eadb"/>`;
+    s += `<rect x="${W - M}" y="0" width="${M}" height="${H}" fill="#f0eadb"/>`;
+    const colFz = Math.max(10, Math.min(16, cs * 0.32));
+    for (let x = 0; x < g.x; x++) {
+      const px = M + x * cs + cs / 2;
+      s += `<text x="${px}" y="${M / 2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${colFz}" font-weight="700" fill="#1a1610">${x}</text>`;
+      s += `<text x="${px}" y="${H - M / 2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${colFz}" font-weight="700" fill="#1a1610">${x}</text>`;
+    }
+    for (let y = 0; y < g.y; y++) {
+      const py = M + y * cs + cs / 2;
+      s += `<text x="${M / 2}" y="${py}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${colFz}" font-weight="700" fill="#1a1610">${y}</text>`;
+      s += `<text x="${W - M / 2}" y="${py}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${colFz}" font-weight="700" fill="#1a1610">${y}</text>`;
+    }
+    s += `<line x1="0" y1="${M}" x2="${W}" y2="${M}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    s += `<line x1="0" y1="${H - M}" x2="${W}" y2="${H - M}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    s += `<line x1="${M}" y1="0" x2="${M}" y2="${H}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+    s += `<line x1="${W - M}" y1="0" x2="${W - M}" y2="${H}" stroke="rgba(60,40,20,0.35)" stroke-width="0.8"/>`;
+  }
+
+  s += `<g transform="translate(${M},${M})">`;
+
+  // Grid-celler (uten tall i hver — n\u00e5 har vi akse-overskrifter)
   for (let y = 0; y < g.y; y++) {
     for (let x = 0; x < g.x; x++) {
       s += `<rect x="${x*cs}" y="${y*cs}" width="${cs}" height="${cs}" fill="none" stroke="#d8d0bd" stroke-width="0.5"/>`;
-      if (g.show_labels !== false) {
-        const fontSize = Math.max(8, Math.min(14, cs * 0.22));
-        s += `<text x="${x*cs + cs/2}" y="${y*cs + cs/2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${fontSize}" fill="#a59880">${x},${y}</text>`;
-      }
     }
   }
 
   // Kort-omriss (stiplet)
   (sd.physical_cards || []).forEach(card => {
+    if (card.in_stash) return;  // bunke-kort vises ikke p\u00e5 board-PNG
     const cx = (card.grid_x || 0) * cs;
     const cy = (card.grid_y || 0) * cs;
     const cw = (card.grid_w || 1) * cs;
     const ch = (card.grid_h || 1) * cs;
     s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="none" stroke="rgba(60,40,20,0.45)" stroke-width="1" stroke-dasharray="6 4"/>`;
-    // Kortnavn i hj\u00f8rne
     if (card.name) {
       s += `<text x="${cx + 4}" y="${cy + 12}" font-family="Helvetica Neue, Arial, sans-serif" font-size="10" fill="rgba(60,40,20,0.7)">${escapeHtml(card.name.slice(0, 20))}</text>`;
     }
@@ -3280,7 +3408,6 @@ function renderBoardForExport() {
     const ax = a.x * cs + cs / 2;
     const ay = a.y * cs + cs / 2;
     s += renderAnchorSvg(ax, ay, cs * 0.55, '#b83228');
-    // Bokstav-label
     const labelR = cs * 0.18;
     const lx = a.x * cs + cs - labelR - 2;
     const ly = a.y * cs + labelR + 2;
@@ -3288,6 +3415,7 @@ function renderBoardForExport() {
     s += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="${labelR * 1.3}" font-weight="700" fill="#fff">${escapeHtml(a.label)}</text>`;
   });
 
+  s += `</g>`;
   s += `</svg>`;
   return s;
 }
@@ -3328,8 +3456,11 @@ async function exportBoardPng() {
   try {
     const sd = scenarioBuf.scenario_data;
     const g = sd.grid;
-    const W = g.x * g.cell_size;
-    const H = g.y * g.cell_size;
+    const cs = g.cell_size;
+    const showLabels = g.show_labels !== false;
+    const M = showLabels ? Math.max(22, Math.round(cs * 0.5)) : 0;
+    const W = g.x * cs + M * 2;
+    const H = g.y * cs + M * 2;
     const svg = renderBoardForExport();
     const blob = await svgToPngBlob(svg, W, H, '#fbfaf6');
     const result = await uploadPngBlob(blob, {
@@ -3415,36 +3546,62 @@ function selectCard(id) {
   renderBoard();
 }
 
+/* Sletter alle Dropbox-filer knyttet til et kort.
+   Dette inkluderer:
+   - card.image_path / card.thumb_path (bilde-kort)
+   - card.export_path / card.export_thumb_path (PNG-eksporter)
+   - alle bildelag i card.content.layers (template-kort)
+   Best-effort: feil ved enkeltsletting stopper ikke totalen.
+*/
+async function deleteAllCardAssets(card) {
+  if (!card) return;
+  const candidates = [];
+
+  // Bilde-kort (gammel type)
+  if (card.image_path) candidates.push({ path: card.image_path, url: card.image_url });
+  if (card.thumb_path) candidates.push({ path: card.thumb_path, url: card.thumb_url });
+
+  // PNG-eksporter (alle korttyper kan ha disse)
+  if (card.export_path) candidates.push({ path: card.export_path, url: card.export_url });
+
+  // Template-kort: bildelag i content
+  if (card.type === 'template' && card.content?.layers) {
+    card.content.layers.forEach(layer => {
+      if (layer.type === 'image') {
+        if (layer.path) candidates.push({ path: layer.path, url: layer.url });
+        if (layer.thumb_path) candidates.push({ path: layer.thumb_path, url: layer.thumb_url });
+      }
+    });
+  }
+
+  // Eldre 'cells'-format (migrerte template-kort)
+  if (Array.isArray(card.cells)) {
+    card.cells.forEach(c => {
+      if (c.path) candidates.push({ path: c.path, url: c.url });
+      if (c.thumb_path) candidates.push({ path: c.thumb_path, url: c.thumb_url });
+    });
+  }
+
+  // Slett alt parallelt — best effort
+  await Promise.allSettled(
+    candidates
+      .filter(c => c.path && c.path.startsWith('/Escape Box/'))
+      .map(c => deleteImage(c.path, c.url).catch(e => console.warn('Slett-feil:', c.path, e.message)))
+  );
+}
+
 async function removeCard(id) {
-  if (!confirm('Fjerne dette kortet fra scenarioet? Bildene slettes også fra skylagring.')) return;
+  if (!confirm('Fjerne dette kortet fra scenarioet? Bilder slettes ogs\u00e5 fra skylagring.')) return;
   const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === id);
 
-  // Best-effort sletting i Dropbox — feil her stopper ikke kort-fjerning
-  if (card?.image_path && card.image_path.startsWith('/Escape Box/')) {
-    try { await deleteImage(card.image_path, card.image_url); }
-    catch (e) { console.warn('Kunne ikke slette bilde:', e.message); }
-  }
-  if (card?.thumb_path && card.thumb_path.startsWith('/Escape Box/')) {
-    try { await deleteImage(card.thumb_path, card.thumb_url); }
-    catch (e) { console.warn('Kunne ikke slette thumb:', e.message); }
-  }
-
-  // Template-kort kan ha bilder per celle — rydd dem også
-  if (card?.type === 'template' && Array.isArray(card.cells)) {
-    for (const cell of card.cells) {
-      if (cell.type === 'image' && cell.path && cell.path.startsWith('/Escape Box/')) {
-        try { await deleteImage(cell.path, cell.url); } catch (e) { /* ignore */ }
-      }
-      if (cell.type === 'image' && cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
-        try { await deleteImage(cell.thumb_path, cell.thumb_url); } catch (e) { /* ignore */ }
-      }
-    }
-  }
+  await deleteAllCardAssets(card);
 
   scenarioBuf.scenario_data.physical_cards =
     scenarioBuf.scenario_data.physical_cards.filter(c => c.id !== id);
   if (boardState.selectedCard === id) boardState.selectedCard = null;
   renderBoard();
+  // Oppdater bunken hvis vi er der
+  if (typeof renderStashList === 'function') renderStashList();
 }
 
 /* ─── DRAG-LOGIKK FOR FYSISKE KORT ─── */
