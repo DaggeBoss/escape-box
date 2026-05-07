@@ -1719,6 +1719,104 @@ const FIELD_TERMINAL_COLORS = [
   { name: 'Sand',    value: '#ede8dc' },
 ];
 
+/* Anker-symbol som SVG-path. Sentrert på (cx, cy), totalstørrelse `size`.
+   Bruker en stilisert anker-form: krone, stamme, krok-armer.
+*/
+function renderAnchorSvg(cx, cy, size, color) {
+  // viewBox er 100x100, vi skalerer til ønsket størrelse
+  const half = size / 2;
+  const x = cx - half;
+  const y = cy - half;
+  // Stilisert anker designet for å være sentrert i 100x100-bokse
+  const path = `
+    M50 14
+    a8 8 0 1 0 0.01 0
+    M50 22
+    L50 84
+    M30 38
+    L70 38
+    M22 64
+    Q22 84 50 86
+    Q78 84 78 64
+    M22 64
+    L14 60
+    M78 64
+    L86 60
+  `.replace(/\s+/g, ' ').trim();
+  return `<g pointer-events="none">
+    <svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="0 0 100 100">
+      <path d="${path}" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+  </g>`;
+}
+
+/* Beregner 4 dempede content-bakgrunnsfarger basert på en hex-farge.
+   Returnerer array av {name, value}. Algoritme: konverterer til HSL,
+   senker metning og hever/senker lightness for å lage variasjoner.
+*/
+function getContentColorSuggestions(hex) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return [];
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  // Fire varianter: lys-dempet, medium-dempet, mørk-dempet, nesten nøytral
+  const variants = [
+    { name: 'Veldig lys', s: 0.10, l: 0.94 },
+    { name: 'Lys',         s: 0.18, l: 0.86 },
+    { name: 'Pastell',     s: 0.26, l: 0.78 },
+    { name: 'Dyp dempet',  s: 0.16, l: 0.66 },
+  ];
+  return variants.map(v => {
+    const rgb2 = hslToRgb(hsl.h, v.s, v.l);
+    return { name: v.name, value: rgbToHex(rgb2.r, rgb2.g, rgb2.b) };
+  });
+}
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) } : null;
+}
+function rgbToHex(r, g, b) {
+  const toHex = n => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+  return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s; const l = (max + min) / 2;
+  if (max === min) { h = 0; s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  return { h, s, l };
+}
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return { r: r * 255, g: g * 255, b: b * 255 };
+}
+
 // Symbolutvalg for footer
 const FOOTER_SYMBOLS = ['🔒','🔑','⚠','☢','⛔','📁','📎','🔍','🚨','★','◆','●','✦','✱','⚙','🎯','🧩','📌'];
 
@@ -1796,6 +1894,11 @@ function createTemplateCard() {
     grid_h: 7,
   };
   ensureTemplateShape(card);
+  // Sett content-bg til en dempet variant av header-fargen som default
+  const suggestions = getContentColorSuggestions(card.header.bg_color);
+  if (suggestions.length > 0) {
+    card.content.bg_color = suggestions[0].value;  // 'Veldig lys'
+  }
   scenarioBuf.scenario_data.physical_cards.push(card);
   boardState.selectedCard = id;
   openTemplateEditor(id);
@@ -2093,12 +2196,12 @@ function renderTemplateCanvas() {
     const x = o.col * cellPx + cellPx / 2;
     const y = o.row * cellPx + cellPx / 2;
     if (o.type === 'anchor') {
-      // Stort anker-symbol uten omkringliggende sirkel
-      html += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-size="${cellPx * 0.85}" fill="#b83228" font-weight="700" pointer-events="none" style="paint-order:stroke;stroke:#fff;stroke-width:${cellPx * 0.05};stroke-linejoin:round;">⚓</text>`;
+      // Stort anker som SVG-path, perfekt sentrert
+      html += renderAnchorSvg(x, y, cellPx * 0.78, '#b83228');
     } else if (o.type === 'coord') {
       // Målskive: to konsentriske ringer i blå med ? i sentrum
-      const r1 = cellPx * 0.42;  // ytre ring
-      const r2 = cellPx * 0.26;  // indre ring
+      const r1 = cellPx * 0.42;
+      const r2 = cellPx * 0.26;
       html += `<g pointer-events="none">`;
       html += `<circle cx="${x}" cy="${y}" r="${r1}" fill="#fff" stroke="#1a4a7a" stroke-width="${cellPx * 0.06}"/>`;
       html += `<circle cx="${x}" cy="${y}" r="${r2}" fill="none" stroke="#1a4a7a" stroke-width="${cellPx * 0.04}"/>`;
@@ -2267,13 +2370,24 @@ function renderColorPalette(field, currentValue, updateFn) {
 
 function renderContentProps() {
   const c = templateBuf.content;
+  const suggestions = getContentColorSuggestions(templateBuf.header.bg_color);
   let body = `
     <div class="te-prop">
       <label>INNHOLD</label>
       <label style="margin-top:10px;">Bakgrunnsfarge</label>
+
+      <div style="font-size:10px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Forslag basert på header</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        ${suggestions.map(sg => {
+          const sel = (sg.value.toLowerCase() === (c.bg_color || '').toLowerCase()) ? 'border:2px solid var(--ink);' : 'border:1px solid var(--rule);';
+          return `<button title="${sg.name} (${sg.value})" style="flex:1;height:34px;${sel}background:${sg.value};border-radius:3px;cursor:pointer;padding:0;font-size:9px;color:rgba(0,0,0,0.5);" onclick="updateContent('bg_color', '${sg.value}')">${sg.name.split(' ')[0]}</button>`;
+        }).join('')}
+      </div>
+
+      <div style="font-size:10px;color:var(--ink3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;margin-top:8px;">Egendefinert</div>
       <div style="display:flex;gap:6px;align-items:center;">
-        <input type="color" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)">
-        <input type="text" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)" style="font-family:var(--font-mono);font-size:11px;">
+        <input type="color" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)" style="width:40px;height:28px;padding:1px;cursor:pointer;">
+        <input type="text" value="${c.bg_color}" oninput="updateContent('bg_color', this.value)" style="flex:1;font-family:var(--font-mono);font-size:11px;">
       </div>
 
       <label style="margin-top:14px;">Lag (${(c.layers || []).length})</label>
@@ -2335,14 +2449,32 @@ function renderLayerProps(layer, idx) {
 /* ─── EGENSKAP-OPPDATERING ─── */
 function updateHeader(field, value) {
   templateBuf.header[field] = value;
+  // Header og footer deler bakgrunnsfarge — synk
+  if (field === 'bg_color') {
+    templateBuf.footer.bg_color = value;
+  }
+  if (field === 'text_color') {
+    // Tekstfarge synkes også slik at de fremstår som ett designsystem
+    templateBuf.footer.text_color = value;
+  }
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
-  // Ikke render hele props-panelet — det stjeler input-fokus
   renderBoard();
 }
 
 function updateFooter(field, value) {
   templateBuf.footer[field] = value;
+  if (field === 'bg_color') {
+    templateBuf.header.bg_color = value;
+  }
+  if (field === 'text_color') {
+    templateBuf.header.text_color = value;
+  }
   $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  // Re-render side-panelet hvis det er header som er valgt
+  // (slik at fargevelgeren reflekterer endringen)
+  if (templateSelectedZone === 'header') {
+    $('#te-prop-panel').innerHTML = renderHeaderProps();
+  }
   renderBoard();
 }
 
@@ -2638,9 +2770,8 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
     const oy = cy + o.row * cellH + cellH/2;
     const cellSize = Math.min(cellW, cellH);
     if (o.type === 'anchor') {
-      // Stort anker uten ring
-      const stroke = cellSize * 0.05;
-      s += `<text x="${ox}" y="${oy}" text-anchor="middle" dominant-baseline="middle" font-size="${cellSize * 0.85}" fill="#b83228" font-weight="700" pointer-events="none" style="paint-order:stroke;stroke:#fff;stroke-width:${stroke};stroke-linejoin:round;">⚓</text>`;
+      // Stort anker som SVG-path
+      s += renderAnchorSvg(ox, oy, cellSize * 0.78, '#b83228');
     } else if (o.type === 'coord') {
       // Målskive med ?
       const r1 = cellSize * 0.42;
