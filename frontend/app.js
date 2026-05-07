@@ -1237,7 +1237,13 @@ const boardState = {
   selectedCard: null,
   hideCards: false,          // skjul kort-grafikk på board, vis kun ankermarkører
   liveInfo: null,            // { card, anchorXY, coordXY } — vises mens kort dras
+  zoom: 1.0,                 // 0.25 - 2.0, applikert som CSS transform p\u00e5 inner-canvas
+  fullscreen: false,         // true n\u00e5r board-canvas vises i fullscreen
 };
+
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 2.0;
+const ZOOM_STEP = 0.15;
 
 /* ─── TEST SCENARIO ─────────────────────────────────────
    Åpner deltagerfrontenden (play.html) i en ny fane med
@@ -1586,11 +1592,58 @@ function renderScBoardTab() {
       </div>
 
       <div class="board-canvas-wrap" id="board-canvas-wrap">
-        <div class="board-canvas-inner" id="board-canvas-inner">
-          <!-- SVG injiseres her -->
+        <div class="board-canvas-toolbar">
+          <button class="bb-tool-btn" onclick="zoomBoardOut()" title="Zoom ut">\u2212</button>
+          <button class="bb-tool-btn bb-tool-zoom" onclick="resetBoardZoom()" title="Tilbakestill zoom" id="bb-zoom-pct">100%</button>
+          <button class="bb-tool-btn" onclick="zoomBoardIn()" title="Zoom inn">+</button>
+          <button class="bb-tool-btn bb-tool-fit" onclick="fitBoardToView()" title="Tilpass til skjerm">\u26f6</button>
+          <button class="bb-tool-btn bb-tool-fs" onclick="toggleBoardFullscreen()" title="Fullskjerm" id="bb-fs-btn">\u26f6 Fullskjerm</button>
+        </div>
+        <div class="board-canvas-scroll" id="board-canvas-scroll">
+          <div class="board-canvas-inner" id="board-canvas-inner">
+            <!-- SVG injiseres her -->
+          </div>
         </div>
       </div>
     </div>
+    <style>
+      .board-canvas-wrap { position:relative; }
+      .board-canvas-toolbar {
+        position:sticky; top:0; z-index:10;
+        display:flex; gap:6px; align-items:center;
+        padding:8px 10px;
+        background:rgba(250,248,243,0.95);
+        border-bottom:1px solid var(--rule);
+        backdrop-filter:blur(4px);
+      }
+      .bb-tool-btn {
+        background:var(--paper); border:1px solid var(--rule); color:var(--ink);
+        font-family:var(--font-cond); font-size:13px; font-weight:700;
+        padding:6px 12px; border-radius:3px; cursor:pointer;
+        transition:background 0.12s, border-color 0.12s;
+      }
+      .bb-tool-btn:hover { background:var(--blue-bg); border-color:var(--blue); }
+      .bb-tool-btn:active { transform:translateY(1px); }
+      .bb-tool-zoom { min-width:60px; font-family:var(--font-mono); }
+      .bb-tool-fs { margin-left:auto; }
+      .board-canvas-scroll {
+        overflow:auto;
+        max-height:calc(100vh - 240px);
+      }
+      .board-canvas-inner {
+        transform-origin: 0 0;
+        transition: transform 0.12s ease-out;
+      }
+      /* Fullskjerm-modus: utnytter hele viewporten */
+      .board-canvas-wrap.is-fullscreen {
+        position:fixed; inset:0; z-index:9999;
+        background:#fbfaf6; padding:0;
+        display:flex; flex-direction:column;
+      }
+      .board-canvas-wrap.is-fullscreen .board-canvas-scroll {
+        max-height:none; flex:1;
+      }
+    </style>
   `;
 }
 
@@ -1611,6 +1664,88 @@ function toggleHideCards(checked) {
   boardState.hideCards = !!checked;
   renderBoard();
 }
+
+/* ─── ZOOM OG FULLSKJERM FOR INVESTIGATION BOARD ─────────
+   Zoom realiseres som CSS transform: scale() p\u00e5 inner-canvas.
+   Dette unng\u00e5r SVG-rerendering ved hver zoom-endring og
+   bevarer all interaktivitet (drag, klikk, hover).
+
+   Drag-koordinater m\u00e5 kompenseres for zoom — se onCardMouseMove.
+   Det gj\u00f8res ved \u00e5 dele drag-distansen p\u00e5 cs * zoom.
+   ─────────────────────────────────────────────────────── */
+function applyBoardZoom() {
+  const inner = $('#board-canvas-inner');
+  if (inner) inner.style.transform = `scale(${boardState.zoom})`;
+  const pct = $('#bb-zoom-pct');
+  if (pct) pct.textContent = `${Math.round(boardState.zoom * 100)}%`;
+}
+
+function zoomBoardIn() {
+  boardState.zoom = Math.min(ZOOM_MAX, boardState.zoom + ZOOM_STEP);
+  applyBoardZoom();
+}
+
+function zoomBoardOut() {
+  boardState.zoom = Math.max(ZOOM_MIN, boardState.zoom - ZOOM_STEP);
+  applyBoardZoom();
+}
+
+function resetBoardZoom() {
+  boardState.zoom = 1.0;
+  applyBoardZoom();
+}
+
+/* Beregner og setter zoom slik at hele boardet f\u00e5r plass i scroll-omr\u00e5det */
+function fitBoardToView() {
+  const scroll = $('#board-canvas-scroll');
+  const inner = $('#board-canvas-inner');
+  const svg = inner?.querySelector('svg');
+  if (!scroll || !svg) return;
+  const viewW = scroll.clientWidth - 20;
+  const viewH = scroll.clientHeight - 20;
+  // Bruk SVG sin attributtbredde/h\u00f8yde, ikke getBBox (zoom kan p\u00e5virke det)
+  const svgW = parseFloat(svg.getAttribute('width')) || svg.clientWidth;
+  const svgH = parseFloat(svg.getAttribute('height')) || svg.clientHeight;
+  if (!svgW || !svgH) return;
+  const scale = Math.min(viewW / svgW, viewH / svgH);
+  boardState.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, scale));
+  applyBoardZoom();
+}
+
+function toggleBoardFullscreen() {
+  const wrap = $('#board-canvas-wrap');
+  if (!wrap) return;
+
+  // Native Fullscreen API er st\u00f8ttet i moderne browsere, men for at
+  // fullskjermen skal v\u00e6re forutsigbar inni en modal bruker vi en
+  // CSS-basert fallback (position:fixed) parallelt. Dette gir oss
+  // konsistent oppf\u00f8rsel uansett om browseren tillater native FS.
+  if (!boardState.fullscreen) {
+    wrap.classList.add('is-fullscreen');
+    boardState.fullscreen = true;
+    const btn = $('#bb-fs-btn');
+    if (btn) btn.textContent = '\u2715 Lukk';
+    // Pr\u00f8v native FS \u00f8verst, men det er greit om det feiler
+    if (wrap.requestFullscreen) {
+      wrap.requestFullscreen().catch(() => { /* native fs er valgfritt */ });
+    }
+  } else {
+    wrap.classList.remove('is-fullscreen');
+    boardState.fullscreen = false;
+    const btn = $('#bb-fs-btn');
+    if (btn) btn.textContent = '\u26f6 Fullskjerm';
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+}
+
+// Lukk fullskjerm hvis brukeren trykker Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && boardState.fullscreen) {
+    toggleBoardFullscreen();
+  }
+});
 
 /* Returnerer en liste over ankere på board, med navn A, B, C, ...
    Hvert objekt: { card_id, name, x, y, label } der x,y er board-koordinater.
@@ -1885,6 +2020,9 @@ function renderBoard() {
   svg += `</g>`;  // lukker grid-wrapper-gruppen
   svg += `</svg>`;
   wrap.innerHTML = svg;
+
+  // Re-applikere zoom-tilstand siden innerHTML-erstatning ikke bevarer transform
+  applyBoardZoom();
 
   renderCardsList();
   renderMiniCoordList();
@@ -3687,8 +3825,10 @@ function onCardMouseMove(e) {
   const drag = boardState.draggingCard;
   if (!drag) return;
   const cs = scenarioBuf.scenario_data.grid.cell_size;
-  const dx = Math.round((e.clientX - drag.startX) / cs);
-  const dy = Math.round((e.clientY - drag.startY) / cs);
+  // Skjerm-piksler / (cellst\u00f8rrelse * zoom) = antall ruter dratt
+  const z = boardState.zoom || 1;
+  const dx = Math.round((e.clientX - drag.startX) / (cs * z));
+  const dy = Math.round((e.clientY - drag.startY) / (cs * z));
   const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === drag.cardId);
   if (!card) return;
   const g = scenarioBuf.scenario_data.grid;
