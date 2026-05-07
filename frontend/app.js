@@ -329,11 +329,13 @@ async function uploadPngBlob(blob, opts) {
     throw new Error('uploadPngBlob: scenario_id og filename må oppgis');
   }
   const form = new FormData();
-  // Vi gir bloben et filnavn som inkluderer ID-en så den blir gjenbrukbar (overwrites
-  // håndteres av backend siden buildScenarioImagePath skaper deterministisk path).
   form.append('file', blob, opts.filename);
   form.append('scenario_id', String(opts.scenario_id));
   form.append('kind', opts.kind || 'cards');
+  // PNG-eksporter overskriver alltid eksisterende fil med samme path.
+  // Dette er sentralt for redigerings-flyten: lagre p\u00e5 nytt = oppdater samme fil,
+  // ikke lag en duplikat med "(1)"-suffix.
+  if (opts.overwrite) form.append('overwrite', 'true');
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -348,6 +350,26 @@ async function uploadPngBlob(blob, opts) {
     xhr.addEventListener('error', () => reject(new Error('Nettverksfeil')));
     xhr.send(form);
   });
+}
+
+/* Gjør et tekststreng trygg for bruk som filnavn. Beholder bokstaver,
+   tall og enkelte safe-tegn. Erstatter alt annet med bindestrek.
+*/
+function sanitizeFilename(name) {
+  if (!name) return 'uten-navn';
+  return String(name)
+    .normalize('NFKD')
+    // norske tegn
+    .replace(/æ/gi, 'ae').replace(/ø/gi, 'oe').replace(/å/gi, 'aa')
+    // fjern diakritiske tegn
+    .replace(/[\u0300-\u036f]/g, '')
+    // bytt alt utenom a-z 0-9 _ - med bindestrek
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    // fjern ledende/etterfølgende bindestreker og kollapssende sekvenser
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .toLowerCase()
+    .slice(0, 60) || 'uten-navn';
 }
 
 /* ─── AUTH ──────────────────────────────────────────── */
@@ -3426,22 +3448,53 @@ function renderBoardForExport() {
    Lagrer URL og path p\u00e5 card.export_url og card.export_path.
    Returnerer { url, path } eller null hvis feil.
 */
+/* Bygger filnavn for kort-PNG basert p\u00e5 kortets navn og om det ligger
+   p\u00e5 board eller i bunke. Bruker sanitizeFilename for trygge tegn.
+   Eksempler:
+     "Document Folder 1" p\u00e5 board → "Grid-document-folder-1.png"
+     "Hint kart"         i bunke   → "Bunke-hint-kart.png"
+*/
+function buildCardExportFilename(card) {
+  const prefix = card.in_stash ? 'Bunke' : 'Grid';
+  const safe = sanitizeFilename(card.name || 'uten-navn');
+  return `${prefix}-${safe}.png`;
+}
+
 async function exportCardPng(card) {
   if (!card || card.type !== 'template') return null;
   if (!state.currentScenarioId) return null;
   try {
     const svg = renderTemplateCardForExport(card);
     const blob = await svgToPngBlob(svg, CARD_EXPORT_WIDTH, CARD_EXPORT_HEIGHT, '#ffffff');
-    // Filnavn er deterministisk basert p\u00e5 kort-ID, slik at nye versjoner overskriver
+    const filename = buildCardExportFilename(card);
+
+    // Hvis kortet er blitt renamed eller flyttet mellom grid/bunke, vil
+    // det nye filnavnet skille seg fra det gamle. Da rydder vi opp i
+    // den gamle filen f\u00f8r vi laster opp den nye, slik at vi ikke
+    // etterlater foreldrel\u00f8se PNG-er i Dropbox.
+    const oldPath = card.export_path;
+    const oldFilename = oldPath ? oldPath.split('/').pop() : null;
+    const filenameChanged = oldFilename && oldFilename !== filename;
+
     const result = await uploadPngBlob(blob, {
       scenario_id: state.currentScenarioId,
       kind: 'cards',
-      filename: `export-${card.id}.png`,
+      filename,
+      overwrite: true,  // kritisk: erstatt eksisterende fil med samme path
     });
+
     if (result?.url) {
       card.export_url = result.url;
       card.export_path = result.path;
     }
+
+    // Slett den gamle filen i bakgrunnen (etter at den nye er trygt p\u00e5 plass)
+    if (filenameChanged && oldPath?.startsWith('/Escape Box/')) {
+      deleteImage(oldPath, card.export_url_old).catch(e => {
+        console.warn('Kunne ikke slette gammel kort-PNG:', e.message);
+      });
+    }
+
     return result;
   } catch (e) {
     console.warn('Kort-eksport feilet:', e.message);
@@ -3468,7 +3521,8 @@ async function exportBoardPng() {
     const result = await uploadPngBlob(blob, {
       scenario_id: state.currentScenarioId,
       kind: 'backgrounds',
-      filename: `export-board.png`,
+      filename: 'Grid-board.png',
+      overwrite: true,
     });
     if (result?.url) {
       sd.board_export_url = result.url;

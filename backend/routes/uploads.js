@@ -52,6 +52,9 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
 
     const scenarioId = parseInt(req.body.scenario_id, 10);
     const kind = req.body.kind || 'coords';
+    // overwrite=true → erstatter eksisterende fil med samme path uten å lage suffix.
+    // Brukes for PNG-eksporter der filnavnet er deterministisk.
+    const overwrite = req.body.overwrite === 'true' || req.body.overwrite === true;
 
     if (!scenarioId || isNaN(scenarioId)) {
       return res.status(400).json({ error: 'scenario_id påkrevd' });
@@ -67,7 +70,7 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
       // Last opp full-versjon
       const full = buildScenarioImagePath(scenarioId, kind, fullFile.originalname || 'image.jpg');
       await ensureFolder(full.dir);
-      const fullResult = await uploadFile(fullFile.buffer, full.fullPath, false);
+      const fullResult = await uploadFile(fullFile.buffer, full.fullPath, overwrite);
       const fullPath = fullResult.path_display || full.fullPath;
       const fullUrl = await getOrCreateSharedLink(fullPath);
 
@@ -81,7 +84,7 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
       // Last opp thumbnail hvis vedlagt
       if (thumbFile) {
         const thumb = buildScenarioImagePath(scenarioId, kind, 'thumb-' + (thumbFile.originalname || 'thumb.jpg'));
-        const thumbResult = await uploadFile(thumbFile.buffer, thumb.fullPath, false);
+        const thumbResult = await uploadFile(thumbFile.buffer, thumb.fullPath, overwrite);
         const thumbPath = thumbResult.path_display || thumb.fullPath;
         const thumbUrl = await getOrCreateSharedLink(thumbPath);
         response.thumb_path = thumbPath;
