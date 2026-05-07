@@ -997,6 +997,7 @@ views.scenarios = async function (root) {
                   <td>${s.active ? '<span class="badge green">Aktiv</span>' : '<span class="badge">Inaktiv</span>'}</td>
                   <td class="col-actions">
                     <button class="btn btn-sm" onclick="openScenarioEditor(${s.id})">Rediger</button>
+                    <button class="btn btn-sm btn-secondary" onclick="testScenarioById(${s.id})" title="Åpne i deltagerfrontend">▶ Test</button>
                     <button class="btn btn-sm btn-secondary" onclick="toggleScenarioActive(${s.id}, ${!s.active})">${s.active ? 'Deaktiver' : 'Aktiver'}</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteScenario(${s.id})">Slett</button>
                   </td>
@@ -1084,6 +1085,151 @@ const boardState = {
   selectedCard: null,
 };
 
+/* ─── TEST SCENARIO ─────────────────────────────────────
+   Åpner deltagerfrontenden (play.html) i en ny fane med
+   det valgte scenarioet lastet inn — uten lagnavn og uten
+   startkode. Brukes til å teste et scenario raskt.
+   ─────────────────────────────────────────────────────── */
+function getPlayUrl() {
+  return location.origin + '/play.html';
+}
+
+/* Editorens reward-struktur konverteres til play.html sitt format */
+function adaptScenarioForPlay(scenario) {
+  const out = JSON.parse(JSON.stringify(scenario));
+  const sd = out.scenario_data || (out.scenario_data = { coordinates: [], settings: {} });
+  if (!Array.isArray(sd.coordinates)) sd.coordinates = [];
+
+  sd.coordinates = sd.coordinates.map((c, ci) => {
+    const rewards = Array.isArray(c.rewards) ? c.rewards : [];
+    const questions = [];
+    const otherPayload = [];
+    rewards.forEach((r, ri) => {
+      if (!r || !r.type) return;
+      if (r.type === 'question') {
+        questions.push({
+          id: `q_${ci}_${ri}`,
+          text: r.text || '',
+          options: Array.isArray(r.options) ? r.options.slice() : ['', '', '', ''],
+          correct: typeof r.correct === 'number' ? r.correct : 0,
+          points: r.points || 5,
+        });
+      } else if (r.type === 'clue') {
+        otherPayload.push({
+          type: 'clue',
+          title: r.title || 'Clue',
+          text: r.text || '',
+          note: r.note || '',
+        });
+      } else if (r.type === 'poi') {
+        otherPayload.push({
+          type: 'poi',
+          name: r.name || 'Unknown',
+          subtitle: r.subtitle || '',
+          note: r.note || '',
+        });
+      } else if (r.type === 'unlock') {
+        otherPayload.push({
+          type: 'unlock',
+          lockName: r.title || 'Lock',
+          code: r.code || (r.text || '').slice(0, 32) || '— — — —',
+          description: r.description || r.text || '',
+        });
+      }
+    });
+
+    const payload = [...otherPayload];
+    if (questions.length > 0) {
+      payload.push({
+        type: 'questions',
+        title: `Spørsmål – (${c.x}, ${c.y})`,
+        questions,
+      });
+    }
+
+    const rawCode = c.code != null ? String(c.code).trim() : '';
+    const isNumeric = rawCode !== '' && /^\d+$/.test(rawCode);
+
+    return {
+      x: c.x,
+      y: c.y,
+      code: isNumeric ? parseInt(rawCode, 10) : rawCode,
+      codeIsText: !isNumeric,
+      points: c.points ?? 10,
+      payload,
+    };
+  });
+
+  return out;
+}
+
+function launchTestPlay(scenario, opts = {}) {
+  if (!scenario || !scenario.scenario_data) {
+    showToast('Scenarioet mangler innhold', 'error');
+    return;
+  }
+  const coords = scenario.scenario_data.coordinates || [];
+  if (coords.length === 0) {
+    if (!confirm('Dette scenarioet har ingen koordinater enda. Åpne testmodus likevel?')) return;
+  }
+  const adapted = adaptScenarioForPlay(scenario);
+  try {
+    sessionStorage.setItem('escapebox_test_scenario', JSON.stringify({
+      scenario: adapted,
+      teamName: opts.teamName || 'Test Team',
+      ts: Date.now(),
+    }));
+  } catch (e) {
+    showToast('Kunne ikke lagre i sessionStorage: ' + e.message, 'error');
+    return;
+  }
+  const w = window.open(getPlayUrl(), '_blank');
+  if (!w) {
+    showToast('Pop-up blokkert. Tillat pop-ups for å teste.', 'error');
+  } else {
+    showToast('Testmodus åpnet i ny fane', 'success');
+  }
+}
+
+async function testScenarioById(id) {
+  try {
+    const sc = await api(`/api/scenarios/${id}`);
+    launchTestPlay(sc);
+  } catch (e) {
+    showToast('Kunne ikke hente scenario: ' + e.message, 'error');
+  }
+}
+
+function testCurrentScenario() {
+  if (!scenarioBuf) {
+    showToast('Ingen scenario åpen', 'error');
+    return;
+  }
+  const liveBuf = JSON.parse(JSON.stringify(scenarioBuf));
+  const nameEl = $('#sc-meta-name');
+  const descEl = $('#sc-meta-desc');
+  const timeEl = $('#sc-meta-time');
+  if (nameEl) liveBuf.name = nameEl.value.trim() || liveBuf.name;
+  if (descEl) liveBuf.description = descEl.value.trim() || liveBuf.description;
+  if (timeEl) {
+    const mins = parseInt(timeEl.value, 10);
+    if (mins > 0) liveBuf.time_limit_seconds = mins * 60;
+  }
+  const setEl = $('#set-time-en');
+  if (setEl) {
+    const s = liveBuf.scenario_data.settings || {};
+    s.time_limit_enabled = setEl.checked;
+    s.show_score = $('#set-show-score')?.checked ?? s.show_score;
+    s.penalty_enabled = $('#set-pen-en')?.checked ?? s.penalty_enabled;
+    s.penalty_amount = parseInt($('#set-pen-amount')?.value, 10) || s.penalty_amount;
+    s.penalty_escalation = $('#set-pen-esc')?.checked ?? s.penalty_escalation;
+    s.penalty_escalation_after = parseInt($('#set-pen-after')?.value, 10) || s.penalty_escalation_after;
+    s.penalty_escalation_amount = parseInt($('#set-pen-esc-amount')?.value, 10) || s.penalty_escalation_amount;
+    liveBuf.scenario_data.settings = s;
+  }
+  launchTestPlay(liveBuf);
+}
+
 async function openScenarioEditor(scenarioId) {
   state.currentScenarioId = scenarioId;
   const sc = await api(`/api/scenarios/${scenarioId}`);
@@ -1101,6 +1247,7 @@ async function openScenarioEditor(scenarioId) {
     body: renderScenarioEditor(),
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
+      <button class="btn btn-secondary" onclick="testCurrentScenario()" title="Åpne i deltagerfrontend uten å lagre">▶ Test scenario</button>
       <button class="btn btn-success" onclick="saveScenario()">⤳ Lagre endringer</button>
     `,
   });
@@ -1336,9 +1483,20 @@ function renderBoard() {
     const cw = card.grid_w * cs;
     const ch = card.grid_h * cs;
     const sel = boardState.selectedCard === card.id;
+    // image_url er den permanente shared linken fra Dropbox.
+    // image_path beholdes for backward-compat hvis et eldre scenario
+    // har en lokal sti — da brukes den som-er.
+    const imgSrc = card.image_url || card.image_path;
     svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
-    if (card.image_path) {
-      svg += `<image href="${escapeHtml(card.image_path)}" x="${cx}" y="${cy}" width="${cw}" height="${ch}" preserveAspectRatio="xMidYMid slice"/>`;
+    if (card.uploading) {
+      // Placeholder under opplasting — grå boks med progress-tekst
+      svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#eee" stroke="#bbb" stroke-dasharray="4 3"/>`;
+      const pct = Math.round((card.progress || 0) * 100);
+      svg += `<text x="${cx + cw/2}" y="${cy + ch/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="14" fill="#666">Laster... ${pct}%</text>`;
+    } else if (imgSrc) {
+      // preserveAspectRatio="xMidYMid meet" = vis hele bildet (kan bli litt tomt rundt
+      // hvis bildeforholdet ikke matcher området).
+      svg += `<image href="${escapeHtml(imgSrc)}" x="${cx}" y="${cy}" width="${cw}" height="${ch}" preserveAspectRatio="xMidYMid meet"/>`;
       svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="none" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}"/>`;
     } else {
       svg += `<rect class="bg" x="${cx}" y="${cy}" width="${cw}" height="${ch}"/>`;
@@ -1366,14 +1524,23 @@ function renderCardsList() {
     el.innerHTML = '<div class="muted" style="font-size:11px;font-style:italic;padding:6px 0;">Ingen fysiske kort lastet opp ennå.</div>';
     return;
   }
-  el.innerHTML = cards.map(c => `
+  el.innerHTML = cards.map(c => {
+    const imgSrc = c.image_url || c.image_path;
+    const thumbStyle = imgSrc && !c.uploading
+      ? `background-image:url('${escapeHtml(imgSrc)}');background-size:cover;background-position:center;`
+      : '';
+    const statusBadge = c.uploading
+      ? `<span style="font-size:10px;color:var(--amber);">⟳ ${Math.round((c.progress || 0) * 100)}%</span>`
+      : '';
+    return `
     <div class="bb-card-item ${boardState.selectedCard === c.id ? 'selected' : ''}" onclick="selectCard('${c.id}')">
-      <div class="bb-card-thumb" style="${c.image_path ? `background-image:url('${escapeHtml(c.image_path)}')` : ''}"></div>
-      <div class="bb-card-name">${escapeHtml(c.name)}</div>
+      <div class="bb-card-thumb" style="${thumbStyle}"></div>
+      <div class="bb-card-name">${escapeHtml(c.name)} ${statusBadge}</div>
       <div class="bb-card-pos">${c.grid_x},${c.grid_y}</div>
       <button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();removeCard('${c.id}')">✕</button>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderMiniCoordList() {
@@ -1419,32 +1586,62 @@ function onCellClick(x, y) {
 }
 
 /* ─── FYSISKE KORT — drag, resize, upload ─── */
-function onCardImageUpload(input) {
+async function onCardImageUpload(input) {
   const file = input.files[0];
   if (!file) return;
-  const name = (file.name || 'kort').replace(/\.[^.]+$/, '');
-  const path = `cards/${file.name}`;
 
-  // Prompt brukeren for path bekreftelse
-  if (!confirm(`Plasser bildet i frontend/${path} (eller endre filsti i kort-detaljene etterpå)?\n\nBildet legges på grid med standardstørrelse 3x3 ruter. Du kan dra og resize det etter plassering.`)) {
+  if (!state.currentScenarioId) {
+    showToast('Lagre scenarioet først, så kan du laste opp bilder', 'error');
     input.value = '';
     return;
   }
 
+  const name = (file.name || 'kort').replace(/\.[^.]+$/, '');
   const id = 'card_' + Date.now();
-  scenarioBuf.scenario_data.physical_cards.push({
+
+  // Legg inn placeholder-kort med en gang så brukeren ser fremdrift
+  const placeholder = {
     id,
     name,
-    image_path: path,
+    image_path: null,
+    image_url: null,
+    uploading: true,
+    progress: 0,
     grid_x: 0,
     grid_y: 0,
     grid_w: 3,
     grid_h: 3,
-  });
+  };
+  scenarioBuf.scenario_data.physical_cards.push(placeholder);
   boardState.selectedCard = id;
-  input.value = '';
   renderBoard();
-  showToast(`Kort lagt til. Husk å plassere ${file.name} i frontend/cards/-mappen.`, 'info', 4000);
+
+  try {
+    const result = await uploadImage(file, {
+      scenario_id: state.currentScenarioId,
+      kind: 'cards',
+      onProgress: (p) => {
+        placeholder.progress = p;
+        renderCardsList();  // bare oppdater listen, ikke hele boarden
+      },
+    });
+
+    placeholder.image_path = result.path;
+    placeholder.image_url = result.url;
+    placeholder.uploading = false;
+    placeholder.progress = 1;
+    renderBoard();
+    showToast(`Bildet er lastet opp (${Math.round(result.size / 1024)} KB)`, 'success');
+  } catch (e) {
+    // Fjern placeholder-kortet ved feil
+    scenarioBuf.scenario_data.physical_cards =
+      scenarioBuf.scenario_data.physical_cards.filter(c => c.id !== id);
+    if (boardState.selectedCard === id) boardState.selectedCard = null;
+    renderBoard();
+    showToast('Opplasting feilet: ' + e.message, 'error');
+  } finally {
+    input.value = '';
+  }
 }
 
 function selectCard(id) {
@@ -1453,8 +1650,19 @@ function selectCard(id) {
   renderBoard();
 }
 
-function removeCard(id) {
-  if (!confirm('Fjerne dette kortet fra scenarioet? (Bildefilen i frontend/cards/ slettes ikke.)')) return;
+async function removeCard(id) {
+  if (!confirm('Fjerne dette kortet fra scenarioet? Bildet slettes også fra skylagring.')) return;
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === id);
+
+  // Best-effort sletting i Dropbox — feil her stopper ikke kort-fjerning
+  if (card?.image_path && card.image_path.startsWith('/Escape Box/')) {
+    try {
+      await deleteImage(card.image_path, card.image_url);
+    } catch (e) {
+      console.warn('Kunne ikke slette bilde fra Dropbox:', e.message);
+    }
+  }
+
   scenarioBuf.scenario_data.physical_cards =
     scenarioBuf.scenario_data.physical_cards.filter(c => c.id !== id);
   if (boardState.selectedCard === id) boardState.selectedCard = null;
