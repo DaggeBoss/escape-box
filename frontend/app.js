@@ -1535,12 +1535,7 @@ function renderScBoardTab() {
 
         <div class="board-config">
           <h4>Fysiske kort</h4>
-          <label class="bb-image-pad">
-            <input type="file" accept="image/*" onchange="onCardImageUpload(this)">
-            <div class="bb-image-pad-icon">⬆</div>
-            <div class="bb-image-pad-text">Last opp bilde<br><span style="opacity:0.6;font-size:10px;">eller dra og slipp</span></div>
-          </label>
-          <button class="btn btn-sm btn-secondary" style="width:100%;margin-top:6px;" onclick="createTemplateCard()">+ Nytt kort fra null</button>
+          <button class="btn btn-sm btn-secondary" style="width:100%;" onclick="createTemplateCard()">+ Nytt kort</button>
           <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin:8px 0 0 0;font-size:12px;cursor:pointer;">
             <input type="checkbox" ${boardState.hideCards ? 'checked' : ''} style="width:auto;" onchange="toggleHideCards(this.checked)">
             <span>Skjul kort (vis kun ankere)</span>
@@ -1767,6 +1762,14 @@ function renderBoard() {
       svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'rgba(0,0,0,0.1)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : '2 4'}" style="cursor:move;"/>`;
       if (sel) {
         svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
+        if (card.type === 'template') {
+          const btnY = cy - 28;
+          const btnX = cx + cw - 78;
+          svg += `<g style="cursor:pointer;" onclick="event.stopPropagation();openTemplateEditor('${card.id}')" onmousedown="event.stopPropagation();">`;
+          svg += `<rect x="${btnX}" y="${btnY}" width="78" height="22" rx="3" fill="var(--ink)" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`;
+          svg += `<text x="${btnX + 39}" y="${btnY + 11}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="11" font-weight="700" fill="#fff">\u270e Rediger</text>`;
+          svg += `</g>`;
+        }
       }
       svg += `</g>`;
       return;
@@ -1790,6 +1793,15 @@ function renderBoard() {
     }
     if (sel) {
       svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
+      // Rediger-knapp for template-kort (\u00f8verst til h\u00f8yre, over kortet)
+      if (card.type === 'template') {
+        const btnY = cy - 28;
+        const btnX = cx + cw - 78;
+        svg += `<g style="cursor:pointer;" onclick="event.stopPropagation();openTemplateEditor('${card.id}')" onmousedown="event.stopPropagation();">`;
+        svg += `<rect x="${btnX}" y="${btnY}" width="78" height="22" rx="3" fill="var(--ink)" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>`;
+        svg += `<text x="${btnX + 39}" y="${btnY + 11}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="11" font-weight="700" fill="#fff">\u270e Rediger</text>`;
+        svg += `</g>`;
+      }
     }
     svg += `</g>`;
   });
