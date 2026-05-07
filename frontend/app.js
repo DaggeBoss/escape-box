@@ -100,6 +100,126 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/* ─── BILDE-OPPLASTING ──────────────────────────────────
+   uploadImage(file, opts) — komprimerer bildet i browseren før
+   det sendes til backend, som lagrer det i Dropbox og returnerer
+   en permanent shared link.
+
+   Argumenter:
+     file: File-objekt (fra <input type="file"> eller drag-and-drop)
+     opts: { scenario_id, kind, maxWidth, quality }
+       - scenario_id: påkrevd (heltall)
+       - kind: 'coords' | 'cards' | 'backgrounds' (default: 'coords')
+       - maxWidth: px (default 1600). Bildet skaleres ned hvis det er bredere.
+       - quality: 0..1 (default 0.82). JPEG-kvalitet ved komprimering.
+
+   Returnerer: { path, url, size, mimetype }
+     - path: Dropbox-stien (lagre denne i scenario_data)
+     - url:  permanent shared link til bruk i <img src=...>
+
+   Onprogress: opts.onProgress(0..1) — valgfri callback med fremdrift
+   ────────────────────────────────────────────────────── */
+async function uploadImage(file, opts = {}) {
+  if (!file) throw new Error('Ingen fil oppgitt');
+  if (!opts.scenario_id) throw new Error('scenario_id er påkrevd');
+
+  const kind = opts.kind || 'coords';
+  const maxWidth = opts.maxWidth || 1600;
+  const quality = opts.quality ?? 0.82;
+
+  // Komprimer (med mindre det er en GIF — ikke vits, mister animasjon)
+  let blob;
+  let filename = file.name || 'image.jpg';
+  if (file.type === 'image/gif') {
+    blob = file;
+  } else {
+    blob = await compressImage(file, { maxWidth, quality });
+    // Bytt extension til .jpg siden vi komprimerer til JPEG
+    filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+  }
+
+  const form = new FormData();
+  form.append('file', blob, filename);
+  form.append('scenario_id', String(opts.scenario_id));
+  form.append('kind', kind);
+
+  // Vi bruker XMLHttpRequest istedenfor fetch for å få progress-events
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + '/api/uploads/image');
+    if (state.token) xhr.setRequestHeader('Authorization', `Bearer ${state.token}`);
+
+    xhr.upload.addEventListener('progress', e => {
+      if (e.lengthComputable && opts.onProgress) {
+        opts.onProgress(e.loaded / e.total);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { data = null; }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        const err = new Error((data && data.error) || `HTTP ${xhr.status}`);
+        err.status = xhr.status;
+        err.data = data;
+        if (xhr.status === 401) logout();
+        reject(err);
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Nettverksfeil ved opplasting')));
+    xhr.addEventListener('abort', () => reject(new Error('Opplasting avbrutt')));
+
+    xhr.send(form);
+  });
+}
+
+/* deleteImage(path, url?) — sletter bildet fra Dropbox.
+   url er valgfri — hvis du har den, sendes den med så shared link
+   blir revoket samtidig (best practice).
+*/
+async function deleteImage(path, url) {
+  const params = new URLSearchParams({ path });
+  if (url) params.set('url', url);
+  return api('/api/uploads/image?' + params.toString(), { method: 'DELETE' });
+}
+
+/* compressImage(file, { maxWidth, quality }) → Blob (image/jpeg)
+   Skalerer bildet ned hvis det er bredere enn maxWidth, og
+   komprimerer som JPEG. Bevarer aspekt-forhold.
+*/
+async function compressImage(file, { maxWidth = 1600, quality = 0.82 } = {}) {
+  const img = await loadImage(file);
+  const scale = Math.min(1, maxWidth / img.naturalWidth);
+  const w = Math.round(img.naturalWidth * scale);
+  const h = Math.round(img.naturalHeight * scale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  // Hvit bakgrunn for transparent PNG (ellers blir det svart i JPEG)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+
+  return new Promise(resolve => {
+    canvas.toBlob(b => resolve(b), 'image/jpeg', quality);
+  });
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = e => { URL.revokeObjectURL(url); reject(new Error('Kunne ikke laste bilde')); };
+    img.src = url;
+  });
+}
+
 /* ─── AUTH ──────────────────────────────────────────── */
 async function login(email, password) {
   const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
@@ -877,7 +997,6 @@ views.scenarios = async function (root) {
                   <td>${s.active ? '<span class="badge green">Aktiv</span>' : '<span class="badge">Inaktiv</span>'}</td>
                   <td class="col-actions">
                     <button class="btn btn-sm" onclick="openScenarioEditor(${s.id})">Rediger</button>
-                    <button class="btn btn-sm btn-secondary" onclick="testScenarioById(${s.id})" title="Åpne i deltagerfrontend">▶ Test</button>
                     <button class="btn btn-sm btn-secondary" onclick="toggleScenarioActive(${s.id}, ${!s.active})">${s.active ? 'Deaktiver' : 'Aktiver'}</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteScenario(${s.id})">Slett</button>
                   </td>
@@ -965,168 +1084,6 @@ const boardState = {
   selectedCard: null,
 };
 
-/* ─── TEST SCENARIO ─────────────────────────────────────
-   Åpner deltagerfrontenden (play.html) i en ny fane med
-   det valgte scenarioet lastet inn — uten lagnavn og uten
-   startkode. Brukes til å teste et scenario raskt.
-
-   Tre varianter:
-   - testScenarioById(id) — henter fra backend (lagret versjon)
-   - testCurrentScenario() — bruker scenarioBuf (med ulagrede endringer)
-   - getPlayUrl()          — returnerer URL-en til play.html
-   ─────────────────────────────────────────────────────── */
-function getPlayUrl() {
-  // play.html ligger på samme Netlify-site som admin-portalen
-  return location.origin + '/play.html';
-}
-
-/* Editorens reward-struktur er ikke 1:1 lik play.html sin payload-struktur,
-   så vi konverterer her. play.html forventer:
-   - { type: 'questions', title, questions: [{ id, text, options, correct, points, type? }] }
-   - { type: 'clue',  title, text, note }
-   - { type: 'poi',   name, subtitle, note }
-   - { type: 'unlock', lockName, code, description }
-*/
-function adaptScenarioForPlay(scenario) {
-  const out = JSON.parse(JSON.stringify(scenario));
-  const sd = out.scenario_data || (out.scenario_data = { coordinates: [], settings: {} });
-  if (!Array.isArray(sd.coordinates)) sd.coordinates = [];
-
-  sd.coordinates = sd.coordinates.map((c, ci) => {
-    const rewards = Array.isArray(c.rewards) ? c.rewards : [];
-    // Samle alle 'question'-rewards i én 'questions'-container; resten beholdes som-er
-    const questions = [];
-    const otherPayload = [];
-    rewards.forEach((r, ri) => {
-      if (!r || !r.type) return;
-      if (r.type === 'question') {
-        questions.push({
-          id: `q_${ci}_${ri}`,
-          text: r.text || '',
-          options: Array.isArray(r.options) ? r.options.slice() : ['', '', '', ''],
-          correct: typeof r.correct === 'number' ? r.correct : 0,
-          points: r.points || 5,
-        });
-      } else if (r.type === 'clue') {
-        otherPayload.push({
-          type: 'clue',
-          title: r.title || 'Clue',
-          text: r.text || '',
-          note: r.note || '',
-        });
-      } else if (r.type === 'poi') {
-        otherPayload.push({
-          type: 'poi',
-          name: r.name || 'Unknown',
-          subtitle: r.subtitle || '',
-          note: r.note || '',
-        });
-      } else if (r.type === 'unlock') {
-        otherPayload.push({
-          type: 'unlock',
-          lockName: r.title || 'Lock',
-          code: r.code || (r.text || '').slice(0, 32) || '— — — —',
-          description: r.description || r.text || '',
-        });
-      }
-    });
-
-    const payload = [...otherPayload];
-    if (questions.length > 0) {
-      payload.push({
-        type: 'questions',
-        title: `Spørsmål – (${c.x}, ${c.y})`,
-        questions,
-      });
-    }
-
-    // Hvis koden er numerisk, marker codeIsText = false så play.html sammenlikner som tall
-    const rawCode = c.code != null ? String(c.code).trim() : '';
-    const isNumeric = rawCode !== '' && /^\d+$/.test(rawCode);
-
-    return {
-      x: c.x,
-      y: c.y,
-      code: isNumeric ? parseInt(rawCode, 10) : rawCode,
-      codeIsText: !isNumeric,
-      points: c.points ?? 10,
-      payload,
-    };
-  });
-
-  return out;
-}
-
-function launchTestPlay(scenario, opts = {}) {
-  if (!scenario || !scenario.scenario_data) {
-    showToast('Scenarioet mangler innhold', 'error');
-    return;
-  }
-  const coords = scenario.scenario_data.coordinates || [];
-  if (coords.length === 0) {
-    if (!confirm('Dette scenarioet har ingen koordinater enda. Åpne testmodus likevel?')) return;
-  }
-  const adapted = adaptScenarioForPlay(scenario);
-  try {
-    sessionStorage.setItem('escapebox_test_scenario', JSON.stringify({
-      scenario: adapted,
-      teamName: opts.teamName || 'Test Team',
-      ts: Date.now(),
-    }));
-  } catch (e) {
-    showToast('Kunne ikke lagre i sessionStorage: ' + e.message, 'error');
-    return;
-  }
-  // Åpne i ny fane slik at admin-portalen forblir tilgjengelig
-  const w = window.open(getPlayUrl(), '_blank');
-  if (!w) {
-    showToast('Pop-up blokkert. Tillat pop-ups for å teste.', 'error');
-  } else {
-    showToast('Testmodus åpnet i ny fane', 'success');
-  }
-}
-
-async function testScenarioById(id) {
-  try {
-    const sc = await api(`/api/scenarios/${id}`);
-    launchTestPlay(sc);
-  } catch (e) {
-    showToast('Kunne ikke hente scenario: ' + e.message, 'error');
-  }
-}
-
-function testCurrentScenario() {
-  if (!scenarioBuf) {
-    showToast('Ingen scenario åpen', 'error');
-    return;
-  }
-  // Plukk opp ulagrede endringer fra meta-feltene hvis de er rendret
-  const liveBuf = JSON.parse(JSON.stringify(scenarioBuf));
-  const nameEl = $('#sc-meta-name');
-  const descEl = $('#sc-meta-desc');
-  const timeEl = $('#sc-meta-time');
-  if (nameEl) liveBuf.name = nameEl.value.trim() || liveBuf.name;
-  if (descEl) liveBuf.description = descEl.value.trim() || liveBuf.description;
-  if (timeEl) {
-    const mins = parseInt(timeEl.value, 10);
-    if (mins > 0) liveBuf.time_limit_seconds = mins * 60;
-  }
-  // Plukk opp settings-endringer hvis innstillinger-tab har vært synlig
-  const setEl = $('#set-time-en');
-  if (setEl) {
-    const s = liveBuf.scenario_data.settings || {};
-    s.time_limit_enabled = setEl.checked;
-    s.show_score = $('#set-show-score')?.checked ?? s.show_score;
-    s.penalty_enabled = $('#set-pen-en')?.checked ?? s.penalty_enabled;
-    s.penalty_amount = parseInt($('#set-pen-amount')?.value, 10) || s.penalty_amount;
-    s.penalty_escalation = $('#set-pen-esc')?.checked ?? s.penalty_escalation;
-    s.penalty_escalation_after = parseInt($('#set-pen-after')?.value, 10) || s.penalty_escalation_after;
-    s.penalty_escalation_amount = parseInt($('#set-pen-esc-amount')?.value, 10) || s.penalty_escalation_amount;
-    liveBuf.scenario_data.settings = s;
-  }
-  launchTestPlay(liveBuf);
-}
-
 async function openScenarioEditor(scenarioId) {
   state.currentScenarioId = scenarioId;
   const sc = await api(`/api/scenarios/${scenarioId}`);
@@ -1144,7 +1101,6 @@ async function openScenarioEditor(scenarioId) {
     body: renderScenarioEditor(),
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
-      <button class="btn btn-secondary" onclick="testCurrentScenario()" title="Åpne i deltagerfrontend uten å lagre">▶ Test scenario</button>
       <button class="btn btn-success" onclick="saveScenario()">⤳ Lagre endringer</button>
     `,
   });
