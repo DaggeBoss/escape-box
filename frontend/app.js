@@ -230,6 +230,126 @@ function loadImage(file) {
   });
 }
 
+/* ─── SVG → PNG EKSPORT ─────────────────────────────────
+   Renderer en SVG-streng til en PNG Blob via canvas.
+   Eksterne <image href> i SVG-en må være CORS-tilgjengelige.
+   Dropbox shared links med dl=0 fungerer ikke i img-elementer
+   uten endring — men siden vi allerede henter dem som dl=1
+   eller raw=1 i upload-flyten, er det greit.
+
+   Argumenter:
+     svgString: <svg>...</svg>-tekst
+     width, height: lerret-størrelse i px
+     bgColor: bakgrunnsfarge (default hvit)
+   Returnerer: Promise<Blob> (image/png)
+*/
+async function svgToPngBlob(svgString, width, height, bgColor = '#ffffff') {
+  // Embedde alle <image href="..."> som data-URLer slik at canvas.drawImage
+  // ikke blir tainted av cross-origin-restriksjoner.
+  const embedded = await embedExternalImagesInSvg(svgString);
+
+  const blob = new Blob([embedded], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('Kunne ikke rendre SVG'));
+      i.src = url;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (bgColor) {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+    ctx.drawImage(img, 0, 0, width, height);
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(b => {
+        if (b) resolve(b);
+        else reject(new Error('toBlob feilet'));
+      }, 'image/png');
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* Henter alle <image href="..."> i SVG-en, fetcher dem og bytter til
+   data-URL. Dette unngår tainted canvas-feil ved drawImage.
+*/
+async function embedExternalImagesInSvg(svgString) {
+  const re = /(<image[^>]*\shref=["'])([^"']+)(["'])/g;
+  const matches = [];
+  let m;
+  while ((m = re.exec(svgString)) !== null) {
+    matches.push({ full: m[0], pre: m[1], url: m[2], post: m[3], index: m.index });
+  }
+  if (matches.length === 0) return svgString;
+
+  // Hent alle bilder parallelt
+  const replacements = await Promise.all(matches.map(async match => {
+    if (match.url.startsWith('data:')) return match;  // allerede embed
+    try {
+      const res = await fetch(match.url);
+      const blob = await res.blob();
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error('FileReader-feil'));
+        r.readAsDataURL(blob);
+      });
+      return { ...match, dataUrl };
+    } catch (e) {
+      console.warn('Kunne ikke embedde bilde:', match.url, e.message);
+      return null;
+    }
+  }));
+
+  // Bytt fra slutten av strengen for å unngå at indekser flytter seg
+  let result = svgString;
+  replacements.filter(Boolean).reverse().forEach(rep => {
+    if (!rep.dataUrl) return;
+    const replacement = rep.pre + rep.dataUrl + rep.post;
+    result = result.slice(0, rep.index) + replacement + result.slice(rep.index + rep.full.length);
+  });
+  return result;
+}
+
+/* Laster opp en blob (PNG) til Dropbox via /api/uploads/image-endepunktet.
+   Backend behandler det som vanlig bilde-opplasting og returnerer shared link.
+*/
+async function uploadPngBlob(blob, opts) {
+  if (!opts || !opts.scenario_id || !opts.filename) {
+    throw new Error('uploadPngBlob: scenario_id og filename må oppgis');
+  }
+  const form = new FormData();
+  // Vi gir bloben et filnavn som inkluderer ID-en så den blir gjenbrukbar (overwrites
+  // håndteres av backend siden buildScenarioImagePath skaper deterministisk path).
+  form.append('file', blob, opts.filename);
+  form.append('scenario_id', String(opts.scenario_id));
+  form.append('kind', opts.kind || 'cards');
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + '/api/uploads/image');
+    if (state.token) xhr.setRequestHeader('Authorization', `Bearer ${state.token}`);
+    xhr.addEventListener('load', () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { data = null; }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error((data && data.error) || `HTTP ${xhr.status}`));
+    });
+    xhr.addEventListener('error', () => reject(new Error('Nettverksfeil')));
+    xhr.send(form);
+  });
+}
+
 /* ─── AUTH ──────────────────────────────────────────── */
 async function login(email, password) {
   const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
@@ -2138,6 +2258,13 @@ async function saveTemplateCardOnly() {
     return;
   }
   try {
+    // 1. Eksporter kortet som PNG og last opp til Dropbox før selve lagringen
+    //    slik at export_url er med i scenario_data n\u00e5r vi PATCHer.
+    if (templateBuf) {
+      showToast('Lagrer kort og genererer PNG...', 'info');
+      await exportCardPng(templateBuf);
+    }
+    // 2. Lagre scenario_data
     await api(`/api/scenarios/${state.currentScenarioId}`, {
       method: 'PATCH',
       body: { scenario_data: scenarioBuf.scenario_data },
@@ -2976,6 +3103,239 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
 }
 
 
+/* ════════════════════════════════════════════════════════
+   PNG-EKSPORT — kort og board som bildefiler
+   ─────────────────────────────────────────────────────────
+   Genererer en PNG-versjon av kort og board ved lagring og
+   laster opp til Dropbox. PNG-ene er kladdkvalitet for
+   forh\u00e5ndsvisning og print-planlegging.
+
+   - Kort: 5\u00d77 cm @ 150 DPI \u2248 295\u00d7413 px. Inkl. overlays.
+   - Board: cellSize px per rute. Grid + ankere + kort-omriss.
+     Ingen koord-symboler, ingen kort-grafikk.
+
+   URL-er for de eksporterte PNG-ene lagres p\u00e5:
+     card.export_url, card.export_path
+     scenarioBuf.scenario_data.board_export_url,
+     scenarioBuf.scenario_data.board_export_path
+   ─────────────────────────────────────────────────────── */
+
+// 5\u00d77 cm @ 150 DPI = 295\u00d7413 px
+const CARD_EXPORT_WIDTH = 295;
+const CARD_EXPORT_HEIGHT = 413;
+
+/* Returnerer ren SVG-streng for ett template-kort, klart for PNG-konvertering. */
+function renderTemplateCardForExport(card) {
+  ensureTemplateShape(card);
+  const W = CARD_EXPORT_WIDTH;
+  const H = CARD_EXPORT_HEIGHT;
+  const cellW = W / card.cols;
+  const cellH = H / card.rows;
+  const headerRows = card.header.rows || HEADER_DEFAULT_ROWS;
+  const footerRows = card.footer.rows || FOOTER_DEFAULT_ROWS;
+  const headerH = headerRows * cellH;
+  const footerH = footerRows * cellH;
+  const contentY = headerH;
+  const contentH = H - headerH - footerH;
+
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+
+  // Hvit bakgrunn under alt
+  s += `<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`;
+
+  // Content-bakgrunn
+  s += `<rect x="0" y="${contentY}" width="${W}" height="${contentH}" fill="${card.content.bg_color}"/>`;
+
+  // Content-lag
+  (card.content.layers || []).forEach(layer => {
+    const lx = (layer.x_pct || 0) * W / 100;
+    const ly = contentY + (layer.y_pct || 0) * contentH / 100;
+    const lw = (layer.w_pct || 50) * W / 100;
+    const lh = (layer.h_pct || 50) * contentH / 100;
+    if (layer.type === 'image' && (layer.url || layer.thumb_url)) {
+      s += `<image href="${escapeHtml(layer.url || layer.thumb_url)}" x="${lx}" y="${ly}" width="${lw}" height="${lh}" preserveAspectRatio="xMidYMid meet"/>`;
+    } else if (layer.type === 'text') {
+      const fz = layer.font_size || 16;
+      const txt = layer.value || '';
+      if (layer.bg_color && layer.bg_color !== 'transparent') {
+        s += `<rect x="${lx}" y="${ly}" width="${lw}" height="${lh}" fill="${layer.bg_color}"/>`;
+      }
+      s += `<text x="${lx + lw/2}" y="${ly + lh/2}" text-anchor="middle" dominant-baseline="middle" font-family="Georgia, serif" font-size="${fz}" fill="${layer.color || '#1a1610'}">${escapeHtml(txt.slice(0, 100))}</text>`;
+    }
+  });
+
+  // Header
+  s += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${card.header.bg_color}"/>`;
+  const headerFz = Math.max(7, headerH * 0.42);
+  s += `<text x="${W * 0.06}" y="${headerH/2}" dominant-baseline="middle" font-family="Georgia, serif" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
+
+  // 4-kode badge
+  if (card.header.code) {
+    const codeFz = headerFz * 0.78;
+    const padX = codeFz * 0.5;
+    const padY = codeFz * 0.15;
+    const codeText = (card.header.code || '').slice(0, 6);
+    const codeWidth = codeText.length * codeFz * 0.65 + padX * 2;
+    const codeHeight = codeFz + padY * 2;
+    const codeX = W * 0.94 - codeWidth;
+    const codeY = headerH/2 - codeHeight/2;
+    s += `<rect x="${codeX}" y="${codeY}" width="${codeWidth}" height="${codeHeight}" fill="${card.header.code_bg_color || '#c8961a'}" stroke="rgba(0,0,0,0.2)" stroke-width="0.5" rx="2"/>`;
+    s += `<text x="${codeX + codeWidth/2}" y="${headerH/2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${codeFz}" font-weight="700" fill="${card.header.code_text_color || '#1a1610'}">${escapeHtml(codeText)}</text>`;
+  }
+
+  // Footer
+  const fy = H - footerH;
+  s += `<rect x="0" y="${fy}" width="${W}" height="${footerH}" fill="${card.footer.bg_color}"/>`;
+  const footerFz = Math.max(6, footerH * 0.45);
+  let fx = W * 0.06;
+  (card.footer.items || []).forEach(item => {
+    const txt = item.value || '';
+    s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="${item.type === 'symbol' ? footerFz * 1.2 : footerFz}" fill="${card.footer.text_color}">${escapeHtml(txt)}</text>`;
+    fx += (item.type === 'symbol' ? footerFz * 1.5 : (txt.length * footerFz * 0.55)) + 6;
+  });
+
+  // Stiplet grid over alt
+  for (let r = 1; r < card.rows; r++) {
+    s += `<line x1="0" y1="${r*cellH}" x2="${W}" y2="${r*cellH}" stroke="rgba(60,40,20,0.32)" stroke-width="0.6" stroke-dasharray="2 2"/>`;
+  }
+  for (let c = 1; c < card.cols; c++) {
+    s += `<line x1="${c*cellW}" y1="0" x2="${c*cellW}" y2="${H}" stroke="rgba(60,40,20,0.32)" stroke-width="0.6" stroke-dasharray="2 2"/>`;
+  }
+
+  // Anker- og koord-overlays (\u00f8nsket av brukeren p\u00e5 kort-PNG)
+  (card.overlays || []).forEach(o => {
+    const ox = o.col * cellW + cellW/2;
+    const oy = o.row * cellH + cellH/2;
+    const cellSize = Math.min(cellW, cellH);
+    if (o.type === 'anchor') {
+      s += renderAnchorSvg(ox, oy, cellSize * 0.78, '#b83228');
+    } else if (o.type === 'coord') {
+      const r1 = cellSize * 0.42;
+      const r2 = cellSize * 0.26;
+      s += `<circle cx="${ox}" cy="${oy}" r="${r1}" fill="#fff" stroke="#1a4a7a" stroke-width="${cellSize * 0.06}"/>`;
+      s += `<circle cx="${ox}" cy="${oy}" r="${r2}" fill="none" stroke="#1a4a7a" stroke-width="${cellSize * 0.04}"/>`;
+      s += `<text x="${ox}" y="${oy + cellSize * 0.03}" text-anchor="middle" dominant-baseline="middle" font-size="${cellSize * 0.36}" fill="#1a4a7a" font-weight="700" font-family="Georgia, serif">?</text>`;
+    }
+  });
+
+  s += `</svg>`;
+  return s;
+}
+
+/* Returnerer ren SVG-streng for hele Investigation Board.
+   Inkluderer: grid, kort-omriss, ankere med bokstaver.
+   IKKE: kort-grafikk, koord-symboler.
+*/
+function renderBoardForExport() {
+  const sd = scenarioBuf.scenario_data;
+  const g = sd.grid;
+  const cs = g.cell_size;
+  const W = g.x * cs;
+  const H = g.y * cs;
+
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+
+  // Bakgrunn
+  s += `<rect x="0" y="0" width="${W}" height="${H}" fill="#fbfaf6"/>`;
+
+  // Grid-celler
+  for (let y = 0; y < g.y; y++) {
+    for (let x = 0; x < g.x; x++) {
+      s += `<rect x="${x*cs}" y="${y*cs}" width="${cs}" height="${cs}" fill="none" stroke="#d8d0bd" stroke-width="0.5"/>`;
+      if (g.show_labels !== false) {
+        const fontSize = Math.max(8, Math.min(14, cs * 0.22));
+        s += `<text x="${x*cs + cs/2}" y="${y*cs + cs/2}" text-anchor="middle" dominant-baseline="middle" font-family="Menlo, monospace" font-size="${fontSize}" fill="#a59880">${x},${y}</text>`;
+      }
+    }
+  }
+
+  // Kort-omriss (stiplet)
+  (sd.physical_cards || []).forEach(card => {
+    const cx = (card.grid_x || 0) * cs;
+    const cy = (card.grid_y || 0) * cs;
+    const cw = (card.grid_w || 1) * cs;
+    const ch = (card.grid_h || 1) * cs;
+    s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="none" stroke="rgba(60,40,20,0.45)" stroke-width="1" stroke-dasharray="6 4"/>`;
+    // Kortnavn i hj\u00f8rne
+    if (card.name) {
+      s += `<text x="${cx + 4}" y="${cy + 12}" font-family="Helvetica Neue, Arial, sans-serif" font-size="10" fill="rgba(60,40,20,0.7)">${escapeHtml(card.name.slice(0, 20))}</text>`;
+    }
+  });
+
+  // Ankere
+  const anchors = getBoardAnchors();
+  anchors.forEach(a => {
+    const ax = a.x * cs + cs / 2;
+    const ay = a.y * cs + cs / 2;
+    s += renderAnchorSvg(ax, ay, cs * 0.55, '#b83228');
+    // Bokstav-label
+    const labelR = cs * 0.18;
+    const lx = a.x * cs + cs - labelR - 2;
+    const ly = a.y * cs + labelR + 2;
+    s += `<circle cx="${lx}" cy="${ly}" r="${labelR}" fill="#b83228" stroke="#fff" stroke-width="1.5"/>`;
+    s += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="${labelR * 1.3}" font-weight="700" fill="#fff">${escapeHtml(a.label)}</text>`;
+  });
+
+  s += `</svg>`;
+  return s;
+}
+
+/* Eksporterer ett kort som PNG og laster opp til Dropbox.
+   Lagrer URL og path p\u00e5 card.export_url og card.export_path.
+   Returnerer { url, path } eller null hvis feil.
+*/
+async function exportCardPng(card) {
+  if (!card || card.type !== 'template') return null;
+  if (!state.currentScenarioId) return null;
+  try {
+    const svg = renderTemplateCardForExport(card);
+    const blob = await svgToPngBlob(svg, CARD_EXPORT_WIDTH, CARD_EXPORT_HEIGHT, '#ffffff');
+    // Filnavn er deterministisk basert p\u00e5 kort-ID, slik at nye versjoner overskriver
+    const result = await uploadPngBlob(blob, {
+      scenario_id: state.currentScenarioId,
+      kind: 'cards',
+      filename: `export-${card.id}.png`,
+    });
+    if (result?.url) {
+      card.export_url = result.url;
+      card.export_path = result.path;
+    }
+    return result;
+  } catch (e) {
+    console.warn('Kort-eksport feilet:', e.message);
+    return null;
+  }
+}
+
+/* Eksporterer hele Investigation Board som PNG og laster opp.
+   Lagrer URL p\u00e5 scenario_data.board_export_url.
+*/
+async function exportBoardPng() {
+  if (!state.currentScenarioId) return null;
+  if (!scenarioBuf?.scenario_data) return null;
+  try {
+    const sd = scenarioBuf.scenario_data;
+    const g = sd.grid;
+    const W = g.x * g.cell_size;
+    const H = g.y * g.cell_size;
+    const svg = renderBoardForExport();
+    const blob = await svgToPngBlob(svg, W, H, '#fbfaf6');
+    const result = await uploadPngBlob(blob, {
+      scenario_id: state.currentScenarioId,
+      kind: 'backgrounds',
+      filename: `export-board.png`,
+    });
+    if (result?.url) {
+      sd.board_export_url = result.url;
+      sd.board_export_path = result.path;
+    }
+    return result;
+  } catch (e) {
+    console.warn('Board-eksport feilet:', e.message);
+    return null;
+  }
+}
+
 /* ─── FYSISKE KORT (bilde-kort) — drag, resize, upload ─── */
 async function onCardImageUpload(input) {
   const file = input.files[0];
@@ -3543,6 +3903,12 @@ async function saveScenario() {
   if (!name) { showToast('Navn påkrevd', 'error'); return; }
 
   try {
+    // 1. Eksporter board som PNG og last opp til Dropbox.
+    //    Vi tar dette f\u00f8rst slik at board_export_url er med n\u00e5r vi PATCHer.
+    showToast('Lagrer scenario og genererer board-PNG...', 'info', 2000);
+    await exportBoardPng();
+
+    // 2. Lagre scenario_data
     await api(`/api/scenarios/${state.currentScenarioId}`, {
       method: 'PATCH',
       body: {
