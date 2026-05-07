@@ -12,6 +12,7 @@ const userRoutes = require('./routes/users');
 const scenarioRoutes = require('./routes/scenarios');
 const eventRoutes = require('./routes/events');
 const sessionRoutes = require('./routes/sessions');
+const uploadRoutes = require('./routes/uploads');
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +44,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/scenarios', scenarioRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/sessions', sessionRoutes);
+app.use('/api/uploads', uploadRoutes);
 
 // WebSocket
 const wss = new WebSocketServer({ server, path: '/ws' });
