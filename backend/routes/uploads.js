@@ -33,19 +33,20 @@ const VALID_KINDS = ['coords', 'cards', 'backgrounds'];
 
 // ─── POST /api/uploads/image ───────────────────────────────
 // multipart/form-data:
-//   - file: bildet
+//   - file: hovedbildet (komprimert, max ~1600px)
+//   - thumb: thumbnail (300px, valgfri)
 //   - scenario_id: påkrevd
 //   - kind: 'coords' | 'cards' | 'backgrounds' (default: 'coords')
 //
-// Returnerer { path, url, size, mimetype } der:
-//   - path: Dropbox-stien (lagres permanent i scenario_data)
-//   - url:  permanent shared link til direkte bruk i <img src>
+// Returnerer { path, url, thumb_path?, thumb_url?, size, mimetype }
 router.post('/image', requireRole('superadmin'), (req, res) => {
-  upload.single('file')(req, res, async (err) => {
+  upload.fields([{ name: 'file', maxCount: 1 }, { name: 'thumb', maxCount: 1 }])(req, res, async (err) => {
     if (err) {
       return res.status(400).json({ error: err.message });
     }
-    if (!req.file) {
+    const fullFile = req.files?.file?.[0];
+    const thumbFile = req.files?.thumb?.[0];
+    if (!fullFile) {
       return res.status(400).json({ error: 'Ingen fil mottatt' });
     }
 
@@ -60,30 +61,35 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
     }
 
     try {
-      const { dir, fullPath } = buildScenarioImagePath(
-        scenarioId,
-        kind,
-        req.file.originalname || 'image.jpg'
-      );
-
-      // Sørg for at scenario-rot og kind-mappen finnes.
-      // path/conflict ignoreres internt i ensureFolder.
+      // Sørg for mappestruktur én gang
       await ensureFolder(`${ROOT}/scenarios/${scenarioId}`);
-      await ensureFolder(dir);
 
-      // Last opp bildet
-      const uploadResult = await uploadFile(req.file.buffer, fullPath, false);
-      const finalPath = uploadResult.path_display || fullPath;
+      // Last opp full-versjon
+      const full = buildScenarioImagePath(scenarioId, kind, fullFile.originalname || 'image.jpg');
+      await ensureFolder(full.dir);
+      const fullResult = await uploadFile(fullFile.buffer, full.fullPath, false);
+      const fullPath = fullResult.path_display || full.fullPath;
+      const fullUrl = await getOrCreateSharedLink(fullPath);
 
-      // Lag permanent shared link (eller hent eksisterende)
-      const url = await getOrCreateSharedLink(finalPath);
+      const response = {
+        path: fullPath,
+        url: fullUrl,
+        size: fullFile.size,
+        mimetype: fullFile.mimetype,
+      };
 
-      res.json({
-        path: finalPath,
-        url,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-      });
+      // Last opp thumbnail hvis vedlagt
+      if (thumbFile) {
+        const thumb = buildScenarioImagePath(scenarioId, kind, 'thumb-' + (thumbFile.originalname || 'thumb.jpg'));
+        const thumbResult = await uploadFile(thumbFile.buffer, thumb.fullPath, false);
+        const thumbPath = thumbResult.path_display || thumb.fullPath;
+        const thumbUrl = await getOrCreateSharedLink(thumbPath);
+        response.thumb_path = thumbPath;
+        response.thumb_url = thumbUrl;
+        response.thumb_size = thumbFile.size;
+      }
+
+      res.json(response);
     } catch (e) {
       console.error('Upload-feil:', e);
       res.status(500).json({ error: e.message || 'Server feil' });

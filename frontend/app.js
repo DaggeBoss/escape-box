@@ -107,17 +107,15 @@ async function api(path, opts = {}) {
 
    Argumenter:
      file: File-objekt (fra <input type="file"> eller drag-and-drop)
-     opts: { scenario_id, kind, maxWidth, quality }
+     opts: { scenario_id, kind, maxWidth, quality, thumbWidth, thumbQuality }
        - scenario_id: påkrevd (heltall)
        - kind: 'coords' | 'cards' | 'backgrounds' (default: 'coords')
        - maxWidth: px (default 1600). Bildet skaleres ned hvis det er bredere.
        - quality: 0..1 (default 0.82). JPEG-kvalitet ved komprimering.
+       - thumbWidth: px (default 300). Thumbnail-bredde. Sett til 0 for å droppe thumb.
+       - thumbQuality: 0..1 (default 0.7). JPEG-kvalitet for thumb.
 
-   Returnerer: { path, url, size, mimetype }
-     - path: Dropbox-stien (lagre denne i scenario_data)
-     - url:  permanent shared link til bruk i <img src=...>
-
-   Onprogress: opts.onProgress(0..1) — valgfri callback med fremdrift
+   Returnerer: { path, url, thumb_path, thumb_url, size, mimetype }
    ────────────────────────────────────────────────────── */
 async function uploadImage(file, opts = {}) {
   if (!file) throw new Error('Ingen fil oppgitt');
@@ -126,24 +124,36 @@ async function uploadImage(file, opts = {}) {
   const kind = opts.kind || 'coords';
   const maxWidth = opts.maxWidth || 1600;
   const quality = opts.quality ?? 0.82;
+  const thumbWidth = opts.thumbWidth ?? 300;
+  const thumbQuality = opts.thumbQuality ?? 0.7;
 
-  // Komprimer (med mindre det er en GIF — ikke vits, mister animasjon)
-  let blob;
+  // Komprimer hovedbilde + lag thumbnail
+  // GIF passerer uten komprimering (mister ellers animasjon)
+  let blob, thumbBlob;
   let filename = file.name || 'image.jpg';
   if (file.type === 'image/gif') {
     blob = file;
+    // Lag fortsatt thumbnail som JPEG (mister animasjon, men det er ok for thumb)
+    if (thumbWidth > 0) {
+      thumbBlob = await compressImage(file, { maxWidth: thumbWidth, quality: thumbQuality });
+    }
   } else {
     blob = await compressImage(file, { maxWidth, quality });
-    // Bytt extension til .jpg siden vi komprimerer til JPEG
+    if (thumbWidth > 0) {
+      thumbBlob = await compressImage(file, { maxWidth: thumbWidth, quality: thumbQuality });
+    }
     filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
   }
 
   const form = new FormData();
   form.append('file', blob, filename);
+  if (thumbBlob) {
+    form.append('thumb', thumbBlob, 'thumb-' + filename);
+  }
   form.append('scenario_id', String(opts.scenario_id));
   form.append('kind', kind);
 
-  // Vi bruker XMLHttpRequest istedenfor fetch for å få progress-events
+  // XMLHttpRequest brukes istedenfor fetch for progress-events
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API + '/api/uploads/image');
@@ -1408,6 +1418,7 @@ function renderScBoardTab() {
             <div class="bb-image-pad-icon">⬆</div>
             <div class="bb-image-pad-text">Last opp bilde<br><span style="opacity:0.6;font-size:10px;">eller dra og slipp</span></div>
           </label>
+          <button class="btn btn-sm btn-secondary" style="width:100%;margin-top:6px;" onclick="createTemplateCard()">+ Nytt kort fra null</button>
           <div class="bb-cards-list" id="bb-cards-list"></div>
         </div>
 
@@ -1483,27 +1494,24 @@ function renderBoard() {
     const cw = card.grid_w * cs;
     const ch = card.grid_h * cs;
     const sel = boardState.selectedCard === card.id;
-    // image_url er den permanente shared linken fra Dropbox.
-    // image_path beholdes for backward-compat hvis et eldre scenario
-    // har en lokal sti — da brukes den som-er.
     const imgSrc = card.image_url || card.image_path;
     svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
+
     if (card.uploading) {
-      // Placeholder under opplasting — grå boks med progress-tekst
       svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#eee" stroke="#bbb" stroke-dasharray="4 3"/>`;
       const pct = Math.round((card.progress || 0) * 100);
       svg += `<text x="${cx + cw/2}" y="${cy + ch/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="14" fill="#666">Laster... ${pct}%</text>`;
+    } else if (card.type === 'template') {
+      // Template-kort — render som mini-rutenett av cellene
+      svg += renderTemplateOnBoard(card, cx, cy, cw, ch, sel);
     } else if (imgSrc) {
-      // preserveAspectRatio="xMidYMid meet" = vis hele bildet (kan bli litt tomt rundt
-      // hvis bildeforholdet ikke matcher området).
-      svg += `<image href="${escapeHtml(imgSrc)}" x="${cx}" y="${cy}" width="${cw}" height="${ch}" preserveAspectRatio="xMidYMid meet"/>`;
-      svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="none" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}"/>`;
+      svg += `<image href="${escapeHtml(imgSrc)}" x="${cx}" y="${cy}" width="${cw}" height="${ch}" preserveAspectRatio="xMidYMid meet" style="pointer-events:none;"/>`;
+      svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}" style="cursor:move;"/>`;
     } else {
       svg += `<rect class="bg" x="${cx}" y="${cy}" width="${cw}" height="${ch}"/>`;
       svg += `<text x="${cx + cw/2}" y="${cy + ch/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="14" fill="var(--blue)">${escapeHtml(card.name || 'Kort')}</text>`;
     }
     if (sel) {
-      // Resize-håndtak nede til høyre
       svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
     }
     svg += `</g>`;
@@ -1525,18 +1533,23 @@ function renderCardsList() {
     return;
   }
   el.innerHTML = cards.map(c => {
-    const imgSrc = c.image_url || c.image_path;
-    const thumbStyle = imgSrc && !c.uploading
-      ? `background-image:url('${escapeHtml(imgSrc)}');background-size:cover;background-position:center;`
+    const thumbSrc = c.thumb_url || c.image_url || c.image_path;
+    const isTemplate = c.type === 'template';
+    const thumbStyle = thumbSrc && !c.uploading
+      ? `background-image:url('${escapeHtml(thumbSrc)}');background-size:cover;background-position:center;`
       : '';
     const statusBadge = c.uploading
       ? `<span style="font-size:10px;color:var(--amber);">⟳ ${Math.round((c.progress || 0) * 100)}%</span>`
+      : (isTemplate ? `<span style="font-size:10px;color:var(--blue);">${c.cells?.length || 0} elementer</span>` : '');
+    const editBtn = isTemplate
+      ? `<button class="btn btn-sm btn-secondary" style="padding:2px 6px;" onclick="event.stopPropagation();openTemplateEditor('${c.id}')">✎</button>`
       : '';
     return `
     <div class="bb-card-item ${boardState.selectedCard === c.id ? 'selected' : ''}" onclick="selectCard('${c.id}')">
-      <div class="bb-card-thumb" style="${thumbStyle}"></div>
+      <div class="bb-card-thumb" style="${thumbStyle}${isTemplate && !thumbSrc ? 'background:linear-gradient(135deg,#faf8f3,#ede8dc);display:flex;align-items:center;justify-content:center;' : ''}">${isTemplate && !thumbSrc ? `<span style="font-size:18px;color:var(--ink3);">▦</span>` : ''}</div>
       <div class="bb-card-name">${escapeHtml(c.name)} ${statusBadge}</div>
       <div class="bb-card-pos">${c.grid_x},${c.grid_y}</div>
+      ${editBtn}
       <button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();removeCard('${c.id}')">✕</button>
     </div>
   `;
@@ -1585,6 +1598,477 @@ function onCellClick(x, y) {
   switchScTab('coords');
 }
 
+function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
+  const cellW = cw / card.cols;
+  const cellH = ch / card.rows;
+  let s = '';
+
+  // Bakgrunn
+  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#faf8f3" style="cursor:move;"/>`;
+
+  // Mini-rutenett-linjer
+  for (let r = 1; r < card.rows; r++) {
+    s += `<line x1="${cx}" y1="${cy + r*cellH}" x2="${cx + cw}" y2="${cy + r*cellH}" stroke="#d8d0bd" stroke-width="0.5" pointer-events="none"/>`;
+  }
+  for (let c = 1; c < card.cols; c++) {
+    s += `<line x1="${cx + c*cellW}" y1="${cy}" x2="${cx + c*cellW}" y2="${cy + ch}" stroke="#d8d0bd" stroke-width="0.5" pointer-events="none"/>`;
+  }
+
+  // Innhold i cellene
+  (card.cells || []).forEach(cell => {
+    const x = cx + cell.col * cellW;
+    const y = cy + cell.row * cellH;
+    const midX = x + cellW/2;
+    const midY = y + cellH/2;
+    const minDim = Math.min(cellW, cellH);
+
+    if (cell.type === 'anchor') {
+      s += `<circle cx="${midX}" cy="${midY}" r="${minDim * 0.3}" fill="var(--red)" opacity="0.2" pointer-events="none"/>`;
+      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-size="${minDim * 0.5}" fill="var(--red)" font-weight="700" pointer-events="none">⚓</text>`;
+    } else if (cell.type === 'coord') {
+      s += `<circle cx="${midX}" cy="${midY}" r="${minDim * 0.3}" fill="var(--blue)" opacity="0.2" pointer-events="none"/>`;
+      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-size="${minDim * 0.45}" fill="var(--blue)" font-weight="700" pointer-events="none">⊕</text>`;
+    } else if (cell.type === 'text') {
+      const txt = (cell.text || '').slice(0, 12);
+      s += `<text x="${midX}" y="${midY}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${Math.min(11, minDim * 0.22)}" fill="var(--ink)" pointer-events="none">${escapeHtml(txt)}</text>`;
+    } else if (cell.type === 'image' && (cell.thumb_url || cell.url)) {
+      s += `<image href="${escapeHtml(cell.thumb_url || cell.url)}" x="${x + 2}" y="${y + 2}" width="${cellW - 4}" height="${cellH - 4}" preserveAspectRatio="xMidYMid meet" pointer-events="none"/>`;
+    }
+  });
+
+  // Ramme
+  s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}" pointer-events="none"/>`;
+
+  return s;
+}
+
+/* ─── KORT-TEMPLATE-EDITOR ──────────────────────────────
+   Lager kort fra null med rutenett (cols × rows), der hver
+   celle kan inneholde:
+   - anchor: kortets nullpunkt på Investigation Board (én per kort)
+   - coord:  peker mot en koordinat (X,Y i scenariokart)
+   - text:   en tekstetikett
+   - image:  et opplastet bilde
+
+   Datamodell (lagret i physical_cards-arrayet):
+   {
+     id: 'card_xxx',
+     type: 'template',
+     name: 'Document Folder 1',
+     cols: 3, rows: 5,
+     cells: [
+       { col, row, type: 'anchor' },
+       { col, row, type: 'coord', coord_x, coord_y },
+       { col, row, type: 'text', text, style },
+       { col, row, type: 'image', url, thumb_url, path, thumb_path },
+     ],
+     // Plassering på Investigation Board:
+     grid_x, grid_y, grid_w, grid_h
+   }
+   ─────────────────────────────────────────────────────── */
+
+let templateBuf = null;
+let templateTool = 'anchor';
+let templateSelectedCell = null;
+
+function createTemplateCard() {
+  const id = 'card_' + Date.now();
+  const card = {
+    id,
+    type: 'template',
+    name: 'Nytt kort',
+    cols: 3,
+    rows: 5,
+    cells: [],
+    grid_x: 0,
+    grid_y: 0,
+    grid_w: 3,
+    grid_h: 5,
+  };
+  scenarioBuf.scenario_data.physical_cards.push(card);
+  boardState.selectedCard = id;
+  openTemplateEditor(id);
+}
+
+function openTemplateEditor(cardId) {
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
+  if (!card) return;
+  templateBuf = card;  // Direkte referanse — endringer skjer på live data
+  templateTool = 'anchor';
+  templateSelectedCell = null;
+
+  openModal({
+    title: 'Kort: ' + (card.name || 'Uten navn'),
+    size: 'xl',
+    body: renderTemplateEditor(),
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Lukk</button>
+    `,
+  });
+}
+
+function renderTemplateEditor() {
+  return `
+    <style>
+      .te-layout { display:grid; grid-template-columns: 220px 1fr 280px; gap:16px; height:520px; }
+      .te-toolbar h4 { font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin:0 0 8px; }
+      .te-tools { display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+      .te-tool { display:flex; align-items:center; gap:10px; padding:8px 10px; border:1.5px solid var(--rule); background:var(--paper); border-radius:3px; cursor:pointer; font-family:var(--font-cond); font-size:13px; transition:border-color 0.12s, background 0.12s; }
+      .te-tool:hover { border-color:var(--blue); background:var(--blue-bg); }
+      .te-tool.active { border-color:var(--ink); background:var(--ink); color:#fff; }
+      .te-tool-icon { font-size:18px; line-height:1; width:22px; text-align:center; }
+      .te-meta { display:flex; flex-direction:column; gap:8px; padding:10px; background:var(--bg2); border-radius:3px; margin-top:auto; }
+      .te-meta input[type=number] { width:60px; }
+      .te-canvas-wrap { display:flex; align-items:center; justify-content:center; background:var(--bg2); border-radius:3px; overflow:hidden; padding:20px; }
+      .te-canvas { background:#faf8f3; border:1.5px solid var(--ink2); }
+      .te-cell { fill:transparent; stroke:#d8d0bd; stroke-width:0.5; cursor:pointer; transition:fill 0.1s; }
+      .te-cell:hover { fill:rgba(26,74,122,0.08); }
+      .te-cell.selected { fill:rgba(200,150,26,0.15); stroke:var(--gold); stroke-width:2; }
+      .te-anchor { fill:var(--red); }
+      .te-coord-marker { fill:var(--blue); }
+      .te-cell-text { font-family:var(--font-cond); font-size:10px; fill:var(--ink); pointer-events:none; }
+      .te-side h4 { font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink3); margin:0 0 8px; }
+      .te-prop { padding:10px; background:var(--paper); border:1px solid var(--rule); border-radius:3px; }
+      .te-prop label { display:block; font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink3); margin-bottom:4px; }
+      .te-prop input, .te-prop select, .te-prop textarea { width:100%; margin-bottom:8px; }
+      .te-prop-empty { color:var(--ink3); font-size:13px; font-style:italic; padding:12px; text-align:center; }
+      .te-cell-icon { width:60%; height:60%; }
+    </style>
+
+    <div class="te-layout">
+      <!-- Verktøyrad -->
+      <div class="te-toolbar" style="display:flex;flex-direction:column;">
+        <h4>Verktøy</h4>
+        <div class="te-tools">
+          <div class="te-tool ${templateTool === 'anchor' ? 'active' : ''}" onclick="setTemplateTool('anchor')">
+            <span class="te-tool-icon">⚓</span>
+            <div>
+              <div style="font-weight:700;">Anker</div>
+              <div style="font-size:10px;opacity:0.7;">Kortets nullpunkt</div>
+            </div>
+          </div>
+          <div class="te-tool ${templateTool === 'coord' ? 'active' : ''}" onclick="setTemplateTool('coord')">
+            <span class="te-tool-icon">⊕</span>
+            <div>
+              <div style="font-weight:700;">Koordinat</div>
+              <div style="font-size:10px;opacity:0.7;">Peker mot X,Y</div>
+            </div>
+          </div>
+          <div class="te-tool ${templateTool === 'text' ? 'active' : ''}" onclick="setTemplateTool('text')">
+            <span class="te-tool-icon">T</span>
+            <div>
+              <div style="font-weight:700;">Tekst</div>
+              <div style="font-size:10px;opacity:0.7;">Etikett</div>
+            </div>
+          </div>
+          <div class="te-tool ${templateTool === 'image' ? 'active' : ''}" onclick="setTemplateTool('image')">
+            <span class="te-tool-icon">🖼</span>
+            <div>
+              <div style="font-weight:700;">Bilde</div>
+              <div style="font-size:10px;opacity:0.7;">Last opp i celle</div>
+            </div>
+          </div>
+          <div class="te-tool ${templateTool === 'erase' ? 'active' : ''}" onclick="setTemplateTool('erase')">
+            <span class="te-tool-icon">✕</span>
+            <div>
+              <div style="font-weight:700;">Fjern</div>
+              <div style="font-size:10px;opacity:0.7;">Slett innhold i celle</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="te-meta">
+          <div>
+            <label class="field-label" style="display:block;font-size:10px;">Kortnavn</label>
+            <input type="text" id="te-name" value="${escapeHtml(templateBuf.name || '')}" oninput="updateTemplateName(this.value)">
+          </div>
+          <div style="display:flex;gap:8px;">
+            <div style="flex:1;">
+              <label class="field-label" style="display:block;font-size:10px;">Kolonner</label>
+              <input type="number" min="1" max="10" value="${templateBuf.cols}" oninput="updateTemplateGrid('cols', this.value)" style="width:100%;">
+            </div>
+            <div style="flex:1;">
+              <label class="field-label" style="display:block;font-size:10px;">Rader</label>
+              <input type="number" min="1" max="10" value="${templateBuf.rows}" oninput="updateTemplateGrid('rows', this.value)" style="width:100%;">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Canvas -->
+      <div class="te-canvas-wrap" id="te-canvas-wrap">
+        ${renderTemplateCanvas()}
+      </div>
+
+      <!-- Egenskapspanel -->
+      <div class="te-side">
+        <h4>Egenskaper</h4>
+        <div id="te-prop-panel">${renderTemplateProps()}</div>
+      </div>
+    </div>
+  `;
+}
+
+function setTemplateTool(tool) {
+  templateTool = tool;
+  // Bare oppdater verktøyradens active-state
+  $$('#modal .te-tool').forEach(el => el.classList.remove('active'));
+  $(`#modal .te-tool[onclick*="'${tool}'"]`)?.classList.add('active');
+}
+
+function updateTemplateName(name) {
+  templateBuf.name = name;
+  renderCardsList();
+}
+
+function updateTemplateGrid(field, value) {
+  const n = Math.max(1, Math.min(10, parseInt(value, 10) || 1));
+  templateBuf[field] = n;
+  // Fjern celler utenfor nye grenser
+  templateBuf.cells = templateBuf.cells.filter(c =>
+    c.col < templateBuf.cols && c.row < templateBuf.rows
+  );
+  // Oppdater også grid_w/grid_h så plassering på board passer
+  templateBuf.grid_w = templateBuf.cols;
+  templateBuf.grid_h = templateBuf.rows;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  renderBoard();
+}
+
+function renderTemplateCanvas() {
+  const cellSize = 60;
+  const W = templateBuf.cols * cellSize;
+  const H = templateBuf.rows * cellSize;
+  const cells = templateBuf.cells || [];
+  const cellsByPos = {};
+  cells.forEach(c => { cellsByPos[`${c.col},${c.row}`] = c; });
+
+  let svg = `<svg class="te-canvas" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Bakgrunn
+  svg += `<rect width="${W}" height="${H}" fill="#faf8f3"/>`;
+
+  // Celler
+  for (let row = 0; row < templateBuf.rows; row++) {
+    for (let col = 0; col < templateBuf.cols; col++) {
+      const x = col * cellSize;
+      const y = row * cellSize;
+      const cell = cellsByPos[`${col},${row}`];
+      const sel = templateSelectedCell && templateSelectedCell.col === col && templateSelectedCell.row === row;
+      const cls = `te-cell${sel ? ' selected' : ''}`;
+      svg += `<rect class="${cls}" x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" onclick="onTemplateCellClick(${col}, ${row})"/>`;
+
+      if (cell) {
+        if (cell.type === 'anchor') {
+          // Rødt anker-symbol
+          svg += `<g pointer-events="none" transform="translate(${x + cellSize/2}, ${y + cellSize/2})">`;
+          svg += `<circle r="14" fill="var(--red)" opacity="0.15"/>`;
+          svg += `<text text-anchor="middle" dominant-baseline="middle" font-size="22" fill="var(--red)" font-weight="700">⚓</text>`;
+          svg += `</g>`;
+        } else if (cell.type === 'coord') {
+          svg += `<g pointer-events="none" transform="translate(${x + cellSize/2}, ${y + cellSize/2})">`;
+          svg += `<circle r="14" fill="var(--blue)" opacity="0.15"/>`;
+          svg += `<text text-anchor="middle" dominant-baseline="middle" font-size="20" fill="var(--blue)" font-weight="700">⊕</text>`;
+          svg += `<text text-anchor="middle" y="22" font-size="10" fill="var(--blue)" font-family="var(--font-mono)">${cell.coord_x ?? '?'},${cell.coord_y ?? '?'}</text>`;
+          svg += `</g>`;
+        } else if (cell.type === 'text') {
+          // Tekstetikett
+          const text = cell.text || '...';
+          svg += `<text x="${x + cellSize/2}" y="${y + cellSize/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-serif)" font-size="11" fill="var(--ink)" pointer-events="none">${escapeHtml(text.slice(0, 20))}</text>`;
+        } else if (cell.type === 'image' && (cell.thumb_url || cell.url)) {
+          svg += `<image href="${escapeHtml(cell.thumb_url || cell.url)}" x="${x + 4}" y="${y + 4}" width="${cellSize - 8}" height="${cellSize - 8}" preserveAspectRatio="xMidYMid meet" pointer-events="none"/>`;
+        } else if (cell.type === 'image') {
+          // Image-celle uten lastet bilde ennå (placeholder)
+          svg += `<text x="${x + cellSize/2}" y="${y + cellSize/2}" text-anchor="middle" dominant-baseline="middle" font-size="20" pointer-events="none">🖼</text>`;
+        }
+      }
+    }
+  }
+
+  svg += `</svg>`;
+  return svg;
+}
+
+function onTemplateCellClick(col, row) {
+  const existing = templateBuf.cells.find(c => c.col === col && c.row === row);
+
+  if (templateTool === 'erase') {
+    if (existing) {
+      templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+      templateSelectedCell = null;
+      $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+      $('#te-prop-panel').innerHTML = renderTemplateProps();
+      renderBoard();
+    }
+    return;
+  }
+
+  // Plasser nytt element av valgt type
+  if (templateTool === 'anchor') {
+    // Bare ett anker per kort — fjern eksisterende
+    templateBuf.cells = templateBuf.cells.filter(c => c.type !== 'anchor');
+    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+    templateBuf.cells.push({ col, row, type: 'anchor' });
+  } else if (templateTool === 'coord') {
+    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+    templateBuf.cells.push({ col, row, type: 'coord', coord_x: null, coord_y: null });
+  } else if (templateTool === 'text') {
+    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+    templateBuf.cells.push({ col, row, type: 'text', text: '' });
+  } else if (templateTool === 'image') {
+    if (existing) templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+    templateBuf.cells.push({ col, row, type: 'image', url: null });
+  }
+
+  templateSelectedCell = { col, row };
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderTemplateProps();
+  renderBoard();
+}
+
+function renderTemplateProps() {
+  if (!templateSelectedCell) {
+    return `<div class="te-prop-empty">Klikk på en celle i kortet for å redigere innholdet.</div>`;
+  }
+  const { col, row } = templateSelectedCell;
+  const cell = templateBuf.cells.find(c => c.col === col && c.row === row);
+  if (!cell) {
+    return `<div class="te-prop-empty">Tom celle ved (${col}, ${row}).<br>Velg et verktøy og klikk for å plassere.</div>`;
+  }
+
+  let body = `<div class="te-prop"><label>Posisjon</label><div style="font-family:var(--font-mono);font-size:13px;color:var(--ink2);margin-bottom:10px;">Kolonne ${col}, rad ${row}</div>`;
+
+  if (cell.type === 'anchor') {
+    body += `<label>Type</label><div>⚓ Anker</div><div style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.4;">Anker-cellen er kortets fysiske referansepunkt. Når kortet legges på Investigation Board, treffer denne cellen hovedrutenettet på en bestemt X,Y.</div>`;
+  } else if (cell.type === 'coord') {
+    const coords = scenarioBuf.scenario_data.coordinates || [];
+    body += `<label>Type</label><div>⊕ Koordinat-symbol</div>`;
+    body += `<label style="margin-top:10px;">Peker mot koordinat</label>`;
+    body += `<select onchange="updateTemplateCellCoord(this.value)">`;
+    body += `<option value="">— Velg koordinat —</option>`;
+    coords.forEach(c => {
+      const sel = (cell.coord_x === c.x && cell.coord_y === c.y) ? 'selected' : '';
+      body += `<option value="${c.x},${c.y}" ${sel}>(${c.x}, ${c.y}) ${c.code ? '· kode: ' + escapeHtml(c.code) : ''}</option>`;
+    });
+    body += `</select>`;
+    body += `<div style="font-size:11px;color:var(--ink3);margin-top:8px;line-height:1.4;">Når deltageren skal taste inn koordinat-symbolet på dette kortet, taster de denne X,Y.</div>`;
+  } else if (cell.type === 'text') {
+    body += `<label>Tekst</label>`;
+    body += `<textarea rows="3" oninput="updateTemplateCellText(this.value)" placeholder="Tekst...">${escapeHtml(cell.text || '')}</textarea>`;
+  } else if (cell.type === 'image') {
+    body += `<label>Bilde i celle</label>`;
+    if (cell.url) {
+      body += `<img src="${escapeHtml(cell.thumb_url || cell.url)}" style="width:100%;border:1px solid var(--rule);border-radius:2px;margin-bottom:8px;">`;
+      body += `<button class="btn btn-sm btn-danger" style="width:100%;" onclick="removeTemplateCellImage()">Fjern bilde</button>`;
+    } else {
+      body += `<label class="bb-image-pad" style="margin-top:0;">`;
+      body += `<input type="file" accept="image/*" onchange="onTemplateCellImageUpload(this)">`;
+      body += `<div class="bb-image-pad-icon">⬆</div>`;
+      body += `<div class="bb-image-pad-text">Last opp bilde</div>`;
+      body += `</label>`;
+    }
+  }
+
+  body += `<button class="btn btn-sm btn-ghost" style="width:100%;margin-top:12px;" onclick="deleteTemplateCell()">Slett denne cellen</button>`;
+  body += `</div>`;
+  return body;
+}
+
+function updateTemplateCellCoord(value) {
+  if (!templateSelectedCell) return;
+  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
+  if (!cell || cell.type !== 'coord') return;
+  if (!value) {
+    cell.coord_x = null;
+    cell.coord_y = null;
+  } else {
+    const [x, y] = value.split(',').map(Number);
+    cell.coord_x = x;
+    cell.coord_y = y;
+  }
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+}
+
+function updateTemplateCellText(text) {
+  if (!templateSelectedCell) return;
+  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
+  if (!cell || cell.type !== 'text') return;
+  cell.text = text;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+}
+
+async function onTemplateCellImageUpload(input) {
+  const file = input.files[0];
+  if (!file || !templateSelectedCell) return;
+  if (!state.currentScenarioId) {
+    showToast('Lagre scenarioet først', 'error');
+    return;
+  }
+  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
+  if (!cell) return;
+
+  try {
+    showToast('Laster opp...', 'info');
+    const result = await uploadImage(file, {
+      scenario_id: state.currentScenarioId,
+      kind: 'cards',
+    });
+    cell.url = result.url;
+    cell.path = result.path;
+    cell.thumb_url = result.thumb_url || result.url;
+    cell.thumb_path = result.thumb_path || null;
+    $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+    $('#te-prop-panel').innerHTML = renderTemplateProps();
+    renderBoard();
+    showToast('Bildet er lastet opp', 'success');
+  } catch (e) {
+    showToast('Opplasting feilet: ' + e.message, 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function removeTemplateCellImage() {
+  if (!templateSelectedCell) return;
+  const cell = templateBuf.cells.find(c => c.col === templateSelectedCell.col && c.row === templateSelectedCell.row);
+  if (!cell || cell.type !== 'image') return;
+  if (cell.path && cell.path.startsWith('/Escape Box/')) {
+    try { await deleteImage(cell.path, cell.url); }
+    catch (e) { console.warn('Kunne ikke slette bilde:', e.message); }
+  }
+  if (cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
+    try { await deleteImage(cell.thumb_path, cell.thumb_url); }
+    catch (e) { console.warn('Kunne ikke slette thumb:', e.message); }
+  }
+  cell.url = null;
+  cell.path = null;
+  cell.thumb_url = null;
+  cell.thumb_path = null;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderTemplateProps();
+  renderBoard();
+}
+
+function deleteTemplateCell() {
+  if (!templateSelectedCell) return;
+  const { col, row } = templateSelectedCell;
+  const cell = templateBuf.cells.find(c => c.col === col && c.row === row);
+  if (cell?.type === 'image' && cell.path) {
+    // Beste prøving — slett bilde fra Dropbox
+    if (cell.path.startsWith('/Escape Box/')) {
+      deleteImage(cell.path, cell.url).catch(e => console.warn('Cleanup-feil:', e.message));
+    }
+    if (cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
+      deleteImage(cell.thumb_path, cell.thumb_url).catch(e => console.warn('Cleanup-feil:', e.message));
+    }
+  }
+  templateBuf.cells = templateBuf.cells.filter(c => !(c.col === col && c.row === row));
+  templateSelectedCell = null;
+  $('#te-canvas-wrap').innerHTML = renderTemplateCanvas();
+  $('#te-prop-panel').innerHTML = renderTemplateProps();
+  renderBoard();
+}
+
 /* ─── FYSISKE KORT — drag, resize, upload ─── */
 async function onCardImageUpload(input) {
   const file = input.files[0];
@@ -1628,6 +2112,8 @@ async function onCardImageUpload(input) {
 
     placeholder.image_path = result.path;
     placeholder.image_url = result.url;
+    placeholder.thumb_path = result.thumb_path || null;
+    placeholder.thumb_url = result.thumb_url || result.url;
     placeholder.uploading = false;
     placeholder.progress = 1;
     renderBoard();
@@ -1651,15 +2137,28 @@ function selectCard(id) {
 }
 
 async function removeCard(id) {
-  if (!confirm('Fjerne dette kortet fra scenarioet? Bildet slettes også fra skylagring.')) return;
+  if (!confirm('Fjerne dette kortet fra scenarioet? Bildene slettes også fra skylagring.')) return;
   const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === id);
 
   // Best-effort sletting i Dropbox — feil her stopper ikke kort-fjerning
   if (card?.image_path && card.image_path.startsWith('/Escape Box/')) {
-    try {
-      await deleteImage(card.image_path, card.image_url);
-    } catch (e) {
-      console.warn('Kunne ikke slette bilde fra Dropbox:', e.message);
+    try { await deleteImage(card.image_path, card.image_url); }
+    catch (e) { console.warn('Kunne ikke slette bilde:', e.message); }
+  }
+  if (card?.thumb_path && card.thumb_path.startsWith('/Escape Box/')) {
+    try { await deleteImage(card.thumb_path, card.thumb_url); }
+    catch (e) { console.warn('Kunne ikke slette thumb:', e.message); }
+  }
+
+  // Template-kort kan ha bilder per celle — rydd dem også
+  if (card?.type === 'template' && Array.isArray(card.cells)) {
+    for (const cell of card.cells) {
+      if (cell.type === 'image' && cell.path && cell.path.startsWith('/Escape Box/')) {
+        try { await deleteImage(cell.path, cell.url); } catch (e) { /* ignore */ }
+      }
+      if (cell.type === 'image' && cell.thumb_path && cell.thumb_path.startsWith('/Escape Box/')) {
+        try { await deleteImage(cell.thumb_path, cell.thumb_url); } catch (e) { /* ignore */ }
+      }
     }
   }
 
