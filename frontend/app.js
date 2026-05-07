@@ -950,19 +950,30 @@ async function deleteScenario(id) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 /* ════════════════════════════════════════════════════════
-   SCENARIO EDITOR — koordinater + belønninger + innstillinger
+   SCENARIO EDITOR — investigation board, koordinater, kort, regler
    ──────────────────────────────────────────────────────── */
-let scenarioBuf = null;       // hele scenarioet vi redigerer
-let editingCoordIdx = -1;     // hvilken koordinat som er valgt
+let scenarioBuf = null;
+let editingCoordIdx = -1;
+let editingCardId = null;
+let activeScTab = 'meta';
+
+// Board-builder state (kun for UI, ikke lagret)
+const boardState = {
+  draggingCard: null,        // { cardId, mode: 'move'|'resize', offsetX, offsetY }
+  selectedCoord: null,       // {x, y}
+  selectedCard: null,
+};
 
 async function openScenarioEditor(scenarioId) {
   state.currentScenarioId = scenarioId;
   const sc = await api(`/api/scenarios/${scenarioId}`);
   scenarioBuf = JSON.parse(JSON.stringify(sc));
-  if (!scenarioBuf.scenario_data) scenarioBuf.scenario_data = { coordinates: [], settings: {} };
-  if (!Array.isArray(scenarioBuf.scenario_data.coordinates)) scenarioBuf.scenario_data.coordinates = [];
-  if (!scenarioBuf.scenario_data.settings) scenarioBuf.scenario_data.settings = {};
+  ensureScenarioShape(scenarioBuf);
   editingCoordIdx = -1;
+  editingCardId = null;
+  activeScTab = 'meta';
+  boardState.selectedCoord = null;
+  boardState.selectedCard = null;
 
   openModal({
     title: 'Scenario: ' + sc.name,
@@ -975,13 +986,22 @@ async function openScenarioEditor(scenarioId) {
   });
 }
 
+function ensureScenarioShape(sc) {
+  if (!sc.scenario_data) sc.scenario_data = {};
+  const sd = sc.scenario_data;
+  if (!sd.grid) sd.grid = { x: 20, y: 15, cell_size: 50, show_labels: true };
+  if (!Array.isArray(sd.coordinates)) sd.coordinates = [];
+  if (!Array.isArray(sd.physical_cards)) sd.physical_cards = [];
+  if (!sd.settings) sd.settings = {};
+}
+
 function renderScenarioEditor() {
   return `
-    <!-- Tabs -->
     <div style="display:flex;gap:0;border-bottom:2px solid var(--rule);margin-bottom:18px;">
-      <button class="tab-btn active" data-tab="meta" onclick="switchScTab('meta')">Generelt</button>
-      <button class="tab-btn" data-tab="coords" onclick="switchScTab('coords')">Koordinater & belønninger</button>
-      <button class="tab-btn" data-tab="settings" onclick="switchScTab('settings')">Spillregler</button>
+      <button class="tab-btn ${activeScTab === 'meta' ? 'active' : ''}" data-tab="meta" onclick="switchScTab('meta')">Generelt</button>
+      <button class="tab-btn ${activeScTab === 'board' ? 'active' : ''}" data-tab="board" onclick="switchScTab('board')">Investigation board</button>
+      <button class="tab-btn ${activeScTab === 'coords' ? 'active' : ''}" data-tab="coords" onclick="switchScTab('coords')">Koordinater & kort</button>
+      <button class="tab-btn ${activeScTab === 'settings' ? 'active' : ''}" data-tab="settings" onclick="switchScTab('settings')">Spillregler</button>
     </div>
 
     <style>
@@ -990,19 +1010,26 @@ function renderScenarioEditor() {
       .tab-btn:hover { color:var(--ink); }
     </style>
 
-    <div id="sc-tab-meta" class="sc-tab">${renderScMetaTab()}</div>
-    <div id="sc-tab-coords" class="sc-tab hidden">${renderScCoordsTab()}</div>
-    <div id="sc-tab-settings" class="sc-tab hidden">${renderScSettingsTab()}</div>
+    <div id="sc-tab-meta" class="sc-tab ${activeScTab !== 'meta' ? 'hidden' : ''}">${renderScMetaTab()}</div>
+    <div id="sc-tab-board" class="sc-tab ${activeScTab !== 'board' ? 'hidden' : ''}">${renderScBoardTab()}</div>
+    <div id="sc-tab-coords" class="sc-tab ${activeScTab !== 'coords' ? 'hidden' : ''}">${renderScCoordsTab()}</div>
+    <div id="sc-tab-settings" class="sc-tab ${activeScTab !== 'settings' ? 'hidden' : ''}">${renderScSettingsTab()}</div>
   `;
 }
 
 function switchScTab(name) {
+  activeScTab = name;
   $$('#modal .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('#modal .sc-tab').forEach(t => t.classList.add('hidden'));
   $('#sc-tab-' + name).classList.remove('hidden');
-  if (name === 'coords') renderCoordList();
+  if (name === 'board') renderBoard();
+  if (name === 'coords') {
+    renderCoordList();
+    renderCoordDetail();
+  }
 }
 
+/* ─── META TAB ──────────────────────────────────────── */
 function renderScMetaTab() {
   const sc = scenarioBuf;
   return `
@@ -1021,6 +1048,7 @@ function renderScMetaTab() {
   `;
 }
 
+/* ─── SETTINGS TAB ──────────────────────────────────── */
 function renderScSettingsTab() {
   const s = scenarioBuf.scenario_data.settings || {};
   return `
@@ -1033,7 +1061,6 @@ function renderScSettingsTab() {
         </label>
       </div>
     </div>
-
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">⚙</span> Poengvisning</div>
       <div class="panel-body">
@@ -1043,7 +1070,6 @@ function renderScSettingsTab() {
         </label>
       </div>
     </div>
-
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">⚙</span> Straff for feil svar</div>
       <div class="panel-body">
@@ -1074,6 +1100,297 @@ function renderScSettingsTab() {
   `;
 }
 
+/* ════════════════════════════════════════════════════════
+   INVESTIGATION BOARD TAB — grid + fysiske kort
+   ──────────────────────────────────────────────────────── */
+function renderScBoardTab() {
+  const g = scenarioBuf.scenario_data.grid;
+  return `
+    <div class="board-builder">
+      <div class="board-sidebar">
+
+        <div class="board-config">
+          <h4>Grid-dimensjoner</h4>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">X-ruter</label>
+              <input id="bb-x" type="number" min="2" max="60" value="${g.x}" oninput="updateGrid('x', this.value)">
+            </div>
+            <div class="field">
+              <label class="field-label">Y-ruter</label>
+              <input id="bb-y" type="number" min="2" max="60" value="${g.y}" oninput="updateGrid('y', this.value)">
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">Cellestørrelse (px)</label>
+            <input id="bb-cs" type="number" min="20" max="120" value="${g.cell_size}" oninput="updateGrid('cell_size', this.value)">
+          </div>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:0;">
+            <input id="bb-labels" type="checkbox" ${g.show_labels !== false ? 'checked' : ''} style="width:auto;" onchange="updateGrid('show_labels', this.checked)">
+            <span style="font-size:12px;">Vis koordinatlabels</span>
+          </label>
+          <div class="bb-derived" id="bb-derived">
+            ${g.x * g.y} ruter · ${g.x * g.cell_size}×${g.y * g.cell_size} px
+          </div>
+        </div>
+
+        <div class="board-config">
+          <h4>Fysiske kort</h4>
+          <label class="bb-image-pad">
+            <input type="file" accept="image/*" onchange="onCardImageUpload(this)">
+            <div class="bb-image-pad-icon">⬆</div>
+            <div class="bb-image-pad-text">Last opp bilde<br><span style="opacity:0.6;font-size:10px;">eller dra og slipp</span></div>
+          </label>
+          <div class="bb-cards-list" id="bb-cards-list"></div>
+        </div>
+
+        <div class="board-config">
+          <h4>Aktive koordinater</h4>
+          <div class="muted" style="font-size:11px;margin-bottom:6px;">
+            Klikk på en rute i grid-et for å redigere. Aktive koordinater vises i gult.
+          </div>
+          <div class="bb-coord-list-mini" id="bb-coord-list-mini"></div>
+        </div>
+
+      </div>
+
+      <div class="board-canvas-wrap" id="board-canvas-wrap">
+        <div class="board-canvas-inner" id="board-canvas-inner">
+          <!-- SVG injiseres her -->
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updateGrid(field, value) {
+  const g = scenarioBuf.scenario_data.grid;
+  if (field === 'show_labels') {
+    g.show_labels = !!value;
+  } else {
+    g[field] = Math.max(2, parseInt(value, 10) || 2);
+  }
+  // Oppdater avledet info
+  const d = $('#bb-derived');
+  if (d) d.textContent = `${g.x * g.y} ruter · ${g.x * g.cell_size}×${g.y * g.cell_size} px`;
+  renderBoard();
+}
+
+function renderBoard() {
+  const wrap = $('#board-canvas-inner');
+  if (!wrap) return;
+  const g = scenarioBuf.scenario_data.grid;
+  const cs = g.cell_size;
+  const W = g.x * cs;
+  const H = g.y * cs;
+  const coordsByXY = {};
+  scenarioBuf.scenario_data.coordinates.forEach((c, i) => {
+    coordsByXY[`${c.x},${c.y}`] = i;
+  });
+
+  // Bygg SVG
+  let svg = `<svg class="board-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Bakgrunn
+  svg += `<rect width="${W}" height="${H}" fill="#fbfaf6"/>`;
+
+  // Ruter
+  for (let y = 0; y < g.y; y++) {
+    for (let x = 0; x < g.x; x++) {
+      const has = (`${x},${y}` in coordsByXY);
+      const sel = boardState.selectedCoord && boardState.selectedCoord.x === x && boardState.selectedCoord.y === y;
+      const cls = `board-cell-rect${has ? ' has-coord' : ''}${sel ? ' selected' : ''}`;
+      svg += `<rect class="${cls}" x="${x*cs}" y="${y*cs}" width="${cs}" height="${cs}" data-x="${x}" data-y="${y}" onclick="onCellClick(${x},${y})"/>`;
+      if (g.show_labels) {
+        const fontSize = Math.max(8, Math.min(14, cs * 0.22));
+        const lblCls = `board-cell-label${has ? ' has-coord' : ''}`;
+        svg += `<text class="${lblCls}" x="${x*cs + cs/2}" y="${y*cs + cs/2}" font-size="${fontSize}">${x},${y}</text>`;
+      }
+    }
+  }
+
+  // Fysiske kort på toppen
+  scenarioBuf.scenario_data.physical_cards.forEach(card => {
+    const cx = card.grid_x * cs;
+    const cy = card.grid_y * cs;
+    const cw = card.grid_w * cs;
+    const ch = card.grid_h * cs;
+    const sel = boardState.selectedCard === card.id;
+    svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
+    if (card.image_path) {
+      svg += `<image href="${escapeHtml(card.image_path)}" x="${cx}" y="${cy}" width="${cw}" height="${ch}" preserveAspectRatio="xMidYMid slice"/>`;
+      svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="none" stroke="${sel ? 'var(--blue)' : 'var(--ink2)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : 'none'}"/>`;
+    } else {
+      svg += `<rect class="bg" x="${cx}" y="${cy}" width="${cw}" height="${ch}"/>`;
+      svg += `<text x="${cx + cw/2}" y="${cy + ch/2}" text-anchor="middle" dominant-baseline="middle" font-family="var(--font-cond)" font-size="14" fill="var(--blue)">${escapeHtml(card.name || 'Kort')}</text>`;
+    }
+    if (sel) {
+      // Resize-håndtak nede til høyre
+      svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
+    }
+    svg += `</g>`;
+  });
+
+  svg += `</svg>`;
+  wrap.innerHTML = svg;
+
+  renderCardsList();
+  renderMiniCoordList();
+}
+
+function renderCardsList() {
+  const el = $('#bb-cards-list');
+  if (!el) return;
+  const cards = scenarioBuf.scenario_data.physical_cards;
+  if (cards.length === 0) {
+    el.innerHTML = '<div class="muted" style="font-size:11px;font-style:italic;padding:6px 0;">Ingen fysiske kort lastet opp ennå.</div>';
+    return;
+  }
+  el.innerHTML = cards.map(c => `
+    <div class="bb-card-item ${boardState.selectedCard === c.id ? 'selected' : ''}" onclick="selectCard('${c.id}')">
+      <div class="bb-card-thumb" style="${c.image_path ? `background-image:url('${escapeHtml(c.image_path)}')` : ''}"></div>
+      <div class="bb-card-name">${escapeHtml(c.name)}</div>
+      <div class="bb-card-pos">${c.grid_x},${c.grid_y}</div>
+      <button class="btn btn-sm btn-ghost" style="padding:2px 6px;" onclick="event.stopPropagation();removeCard('${c.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+function renderMiniCoordList() {
+  const el = $('#bb-coord-list-mini');
+  if (!el) return;
+  const list = scenarioBuf.scenario_data.coordinates;
+  if (list.length === 0) {
+    el.innerHTML = '<div class="muted" style="font-size:11px;font-style:italic;padding:6px 0;">Ingen koordinater lagt til ennå. Klikk en rute i grid-et.</div>';
+    return;
+  }
+  el.innerHTML = list.map((c, i) => `
+    <div class="bb-coord-mini ${i === editingCoordIdx ? 'selected' : ''}" onclick="selectCoordFromBoard(${i})">
+      <span class="bb-coord-mini-xy">${c.x},${c.y}</span>
+      <span class="bb-coord-mini-meta">${(c.rewards || []).length} bel · ${c.points ?? 0} p</span>
+    </div>
+  `).join('');
+}
+
+function selectCoordFromBoard(idx) {
+  editingCoordIdx = idx;
+  const c = scenarioBuf.scenario_data.coordinates[idx];
+  boardState.selectedCoord = c ? { x: c.x, y: c.y } : null;
+  renderBoard();
+  // Hopp til coords-tab for full redigering
+  switchScTab('coords');
+}
+
+function onCellClick(x, y) {
+  // Hvis vi drar et kort, ignorer
+  if (boardState.draggingCard) return;
+
+  // Sjekk om koordinat finnes
+  const list = scenarioBuf.scenario_data.coordinates;
+  let idx = list.findIndex(c => c.x === x && c.y === y);
+  if (idx < 0) {
+    // Opprett ny
+    list.push({ x, y, code: '', points: 10, rewards: [] });
+    idx = list.length - 1;
+  }
+  editingCoordIdx = idx;
+  boardState.selectedCoord = { x, y };
+  switchScTab('coords');
+}
+
+/* ─── FYSISKE KORT — drag, resize, upload ─── */
+function onCardImageUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const name = (file.name || 'kort').replace(/\.[^.]+$/, '');
+  const path = `cards/${file.name}`;
+
+  // Prompt brukeren for path bekreftelse
+  if (!confirm(`Plasser bildet i frontend/${path} (eller endre filsti i kort-detaljene etterpå)?\n\nBildet legges på grid med standardstørrelse 3x3 ruter. Du kan dra og resize det etter plassering.`)) {
+    input.value = '';
+    return;
+  }
+
+  const id = 'card_' + Date.now();
+  scenarioBuf.scenario_data.physical_cards.push({
+    id,
+    name,
+    image_path: path,
+    grid_x: 0,
+    grid_y: 0,
+    grid_w: 3,
+    grid_h: 3,
+  });
+  boardState.selectedCard = id;
+  input.value = '';
+  renderBoard();
+  showToast(`Kort lagt til. Husk å plassere ${file.name} i frontend/cards/-mappen.`, 'info', 4000);
+}
+
+function selectCard(id) {
+  boardState.selectedCard = id;
+  boardState.selectedCoord = null;
+  renderBoard();
+}
+
+function removeCard(id) {
+  if (!confirm('Fjerne dette kortet fra scenarioet? (Bildefilen i frontend/cards/ slettes ikke.)')) return;
+  scenarioBuf.scenario_data.physical_cards =
+    scenarioBuf.scenario_data.physical_cards.filter(c => c.id !== id);
+  if (boardState.selectedCard === id) boardState.selectedCard = null;
+  renderBoard();
+}
+
+/* ─── DRAG-LOGIKK FOR FYSISKE KORT ─── */
+function onCardMouseDown(e, cardId, mode = 'move') {
+  e.preventDefault();
+  e.stopPropagation();
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
+  if (!card) return;
+  boardState.selectedCard = cardId;
+  boardState.draggingCard = {
+    cardId, mode,
+    startX: e.clientX,
+    startY: e.clientY,
+    origX: card.grid_x,
+    origY: card.grid_y,
+    origW: card.grid_w,
+    origH: card.grid_h,
+  };
+  document.addEventListener('mousemove', onCardMouseMove);
+  document.addEventListener('mouseup', onCardMouseUp);
+  renderBoard();
+}
+
+function onCardMouseMove(e) {
+  const drag = boardState.draggingCard;
+  if (!drag) return;
+  const cs = scenarioBuf.scenario_data.grid.cell_size;
+  const dx = Math.round((e.clientX - drag.startX) / cs);
+  const dy = Math.round((e.clientY - drag.startY) / cs);
+  const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === drag.cardId);
+  if (!card) return;
+  const g = scenarioBuf.scenario_data.grid;
+
+  if (drag.mode === 'move') {
+    card.grid_x = Math.max(0, Math.min(g.x - card.grid_w, drag.origX + dx));
+    card.grid_y = Math.max(0, Math.min(g.y - card.grid_h, drag.origY + dy));
+  } else if (drag.mode === 'resize-se') {
+    card.grid_w = Math.max(1, Math.min(g.x - card.grid_x, drag.origW + dx));
+    card.grid_h = Math.max(1, Math.min(g.y - card.grid_y, drag.origH + dy));
+  }
+  // Rerender bare kortet, ikke hele grid (rask oppdatering)
+  renderBoard();
+}
+
+function onCardMouseUp() {
+  boardState.draggingCard = null;
+  document.removeEventListener('mousemove', onCardMouseMove);
+  document.removeEventListener('mouseup', onCardMouseUp);
+}
+/* ════════════════════════════════════════════════════════
+   COORDINATES & REWARDS TAB — inline kort-editor
+   ──────────────────────────────────────────────────────── */
 function renderScCoordsTab() {
   return `
     <div class="coord-editor">
@@ -1086,7 +1403,7 @@ function renderScCoordsTab() {
       </div>
       <div class="coord-detail" id="coord-detail">
         <div class="empty-coord-msg">
-          ◇<br><br>Velg en koordinat fra listen, eller opprett en ny.
+          ◇<br><br>Velg en koordinat fra listen, eller klikk en rute på investigation board-en.
         </div>
       </div>
     </div>
@@ -1098,7 +1415,7 @@ function renderCoordList() {
   const body = $('#coord-list-body');
   if (!body) return;
   if (list.length === 0) {
-    body.innerHTML = '<div class="muted text-center" style="padding:30px 14px;font-style:italic;font-family:var(--font-serif);">Ingen koordinater. Klikk «+ Ny» for å legge til.</div>';
+    body.innerHTML = '<div class="muted text-center" style="padding:30px 14px;font-style:italic;font-family:var(--font-serif);">Ingen koordinater. Klikk «+ Ny» eller plasser via investigation board.</div>';
     return;
   }
   body.innerHTML = list.map((c, i) => `
@@ -1112,16 +1429,15 @@ function renderCoordList() {
 
 function selectCoord(idx) {
   editingCoordIdx = idx;
+  const c = scenarioBuf.scenario_data.coordinates[idx];
+  boardState.selectedCoord = c ? { x: c.x, y: c.y } : null;
   renderCoordList();
   renderCoordDetail();
 }
 
 function addCoord() {
   scenarioBuf.scenario_data.coordinates.push({
-    x: 0, y: 0,
-    code: '',
-    points: 10,
-    rewards: [],
+    x: 0, y: 0, code: '', points: 10, rewards: [],
   });
   editingCoordIdx = scenarioBuf.scenario_data.coordinates.length - 1;
   renderCoordList();
@@ -1140,21 +1456,21 @@ function renderCoordDetail() {
 
   detail.innerHTML = `
     <div class="flex-between mb-2">
-      <h3 style="font-family:var(--font-serif);font-size:18px;">Koordinat #${editingCoordIdx + 1}</h3>
-      <button class="btn btn-sm btn-danger" onclick="removeCoord(${editingCoordIdx})">✕ Slett</button>
+      <h3 style="font-family:var(--font-serif);font-size:18px;">Koordinat (${c.x ?? '—'}, ${c.y ?? '—'})</h3>
+      <button class="btn btn-sm btn-danger" onclick="removeCoord(${editingCoordIdx})">✕ Slett koordinat</button>
     </div>
 
     <div class="field-row-3">
       <div class="field">
         <label class="field-label">X</label>
-        <input id="cd-x" type="number" value="${c.x ?? 0}" oninput="updateCoord('x', this.value, true)">
+        <input id="cd-x" type="number" min="0" value="${c.x ?? 0}" oninput="updateCoord('x', this.value, true)">
       </div>
       <div class="field">
         <label class="field-label">Y</label>
-        <input id="cd-y" type="number" value="${c.y ?? 0}" oninput="updateCoord('y', this.value, true)">
+        <input id="cd-y" type="number" min="0" value="${c.y ?? 0}" oninput="updateCoord('y', this.value, true)">
       </div>
       <div class="field">
-        <label class="field-label">Poeng</label>
+        <label class="field-label">Poeng for koordinat</label>
         <input id="cd-points" type="number" min="0" value="${c.points ?? 10}" oninput="updateCoord('points', this.value, true)">
       </div>
     </div>
@@ -1178,7 +1494,7 @@ function renderCoordDetail() {
       </div>
     </div>
 
-    <div class="reward-list" id="reward-list">${renderRewards(c.rewards || [])}</div>
+    <div id="reward-list">${renderRewards(c.rewards || [])}</div>
   `;
 }
 
@@ -1186,127 +1502,202 @@ function updateCoord(field, value, isNumber = false) {
   const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
   if (!c) return;
   c[field] = isNumber ? (value === '' ? null : Number(value)) : value;
-  // Oppdater listen i sanntid
   renderCoordList();
+  if (field === 'x' || field === 'y') {
+    boardState.selectedCoord = { x: c.x, y: c.y };
+  }
 }
 
 function removeCoord(idx) {
   if (!confirm('Slette denne koordinaten med alle belønninger?')) return;
   scenarioBuf.scenario_data.coordinates.splice(idx, 1);
   editingCoordIdx = -1;
+  boardState.selectedCoord = null;
   renderCoordList();
   renderCoordDetail();
 }
 
+/* ─── BELØNNINGER MED INLINE FIELD TERMINAL-KORT ─── */
 function renderRewards(rewards) {
-  if (rewards.length === 0) return '<div class="muted" style="font-style:italic;padding:10px;">Ingen belønninger ennå.</div>';
-  return rewards.map((r, i) => renderRewardItem(r, i)).join('');
+  if (rewards.length === 0) {
+    return '<div class="muted" style="font-style:italic;padding:10px;text-align:center;">Ingen belønninger ennå. Bruk knappene over for å legge til.</div>';
+  }
+  return rewards.map((r, i) => renderRewardCard(r, i)).join('');
 }
 
-function renderRewardItem(r, idx) {
-  const typeLabels = { question: 'Spørsmål', clue: 'Spor', poi: 'Person', unlock: 'Lås' };
-  if (r.type === 'question') {
-    return `
-      <div class="reward-item r-question">
-        <div class="reward-item-header">
-          <span class="reward-type-badge t-question">${typeLabels[r.type]}</span>
-          <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})">✕</button>
+function renderRewardCard(r, idx) {
+  return `
+    <div class="reward-item r-${r.type}" data-idx="${idx}">
+      <div class="reward-item-header">
+        <div class="fc-type-switcher" style="flex:1;max-width:380px;">
+          <button class="fc-type-btn ${r.type === 'clue' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'clue')">Spor</button>
+          <button class="fc-type-btn ${r.type === 'poi' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'poi')">Person</button>
+          <button class="fc-type-btn ${r.type === 'unlock' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'unlock')">Lås</button>
+          <button class="fc-type-btn ${r.type === 'question' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'question')">Spørsmål</button>
         </div>
-        <div class="field">
-          <label class="field-label">Spørsmål</label>
-          <textarea oninput="updateReward(${idx}, 'text', this.value)" rows="2">${escapeHtml(r.text || '')}</textarea>
+        <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})" style="margin-left:auto;">✕ Fjern</button>
+      </div>
+      ${renderRewardCardBody(r, idx)}
+    </div>
+  `;
+}
+
+function renderRewardCardBody(r, idx) {
+  if (r.type === 'clue') return renderClueCardEditable(r, idx);
+  if (r.type === 'poi')  return renderPoiCardEditable(r, idx);
+  if (r.type === 'unlock') return renderUnlockCardEditable(r, idx);
+  if (r.type === 'question') return renderQuestionCardEditable(r, idx);
+  return '<div class="muted">Ukjent type</div>';
+}
+
+function renderClueCardEditable(r, idx) {
+  return `
+    <div class="fc-clue-card">
+      <div class="fc-card-header">
+        <span class="fc-card-icon">🔎</span>
+        <span class="fc-card-title">
+          <span contenteditable="true" class="editable" data-empty="${!r.title}" data-placeholder="Intelligence Clue"
+                oninput="updateRewardEditable(${idx}, 'title', this.textContent)">${escapeHtml(r.title || '')}</span>
+        </span>
+        <span class="fc-card-tag">Clue</span>
+      </div>
+      <div class="fc-card-body">
+        <div class="fc-clue-text">
+          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Skriv spor-teksten her — det viktigste deltagerne skal oppdage"
+                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
         </div>
-        <div class="field-row">
-          <div class="field">
-            <label class="field-label">Poeng</label>
-            <input type="number" min="0" value="${r.points ?? 5}" oninput="updateReward(${idx}, 'points', Number(this.value))">
+        <div class="fc-clue-note">
+          <span contenteditable="true" class="editable" data-empty="${!r.note}" data-placeholder="Valgfri notat (kontekst, hint, kobling)"
+                oninput="updateRewardEditable(${idx}, 'note', this.textContent)">${escapeHtml(r.note || '')}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPoiCardEditable(r, idx) {
+  const initials = (r.name || '?').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 3) || '?';
+  return `
+    <div class="fc-poi-card">
+      <div class="fc-card-header">
+        <span class="fc-card-icon">🚨</span>
+        <span class="fc-card-title">Person of Interest</span>
+        <span class="fc-card-tag">Flagged</span>
+      </div>
+      <div class="fc-card-body">
+        <div class="fc-poi-name-block">
+          <div class="fc-poi-icon-circle">${escapeHtml(initials)}</div>
+          <div style="flex:1;">
+            <div class="fc-poi-name">
+              <span contenteditable="true" class="editable" data-empty="${!r.name}" data-placeholder="Navn på person"
+                    oninput="updateRewardEditable(${idx}, 'name', this.textContent);refreshPoiInitials(${idx})">${escapeHtml(r.name || '')}</span>
+            </div>
+            <div class="fc-poi-subtitle">
+              <span contenteditable="true" class="editable" data-empty="${!r.subtitle}" data-placeholder="Tittel/rolle (f.eks. «Under investigation»)"
+                    oninput="updateRewardEditable(${idx}, 'subtitle', this.textContent)">${escapeHtml(r.subtitle || '')}</span>
+            </div>
           </div>
-          <div class="field">
-            <label class="field-label">Riktig svar (indeks 0-3)</label>
-            <input type="number" min="0" max="3" value="${r.correct ?? 0}" oninput="updateReward(${idx}, 'correct', Number(this.value))">
-          </div>
         </div>
-        <div class="field">
-          <label class="field-label">Svaralternativer (4 stk)</label>
+        <div class="fc-poi-note">
+          <span contenteditable="true" class="editable" data-empty="${!r.note}" data-placeholder="Valgfri notat — bakgrunn eller hva deltagerne bør merke seg"
+                oninput="updateRewardEditable(${idx}, 'note', this.textContent)">${escapeHtml(r.note || '')}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function refreshPoiInitials(idx) {
+  // Re-render bare initialene uten å miste fokus i editable
+  const r = scenarioBuf.scenario_data.coordinates[editingCoordIdx]?.rewards?.[idx];
+  if (!r) return;
+  const wrapper = $(`.reward-item[data-idx="${idx}"] .fc-poi-icon-circle`);
+  if (wrapper) {
+    const initials = (r.name || '?').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 3) || '?';
+    wrapper.textContent = initials;
+  }
+}
+
+function renderUnlockCardEditable(r, idx) {
+  return `
+    <div class="fc-unlock-card">
+      <div class="fc-card-header">
+        <span class="fc-card-icon">🔓</span>
+        <span class="fc-card-title">
+          <span contenteditable="true" class="editable" data-empty="${!r.title}" data-placeholder="Tittel — f.eks. «Hengelås på safe»"
+                oninput="updateRewardEditable(${idx}, 'title', this.textContent)">${escapeHtml(r.title || '')}</span>
+        </span>
+        <span class="fc-card-tag">Unlock</span>
+      </div>
+      <div class="fc-card-body">
+        <div class="fc-unlock-text">
+          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Instruksjon — hva deltagerne skal gjøre fysisk"
+                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
+        </div>
+        <div class="fc-unlock-bonus">
+          Bonus ved bekreftelse:
+          <input type="number" min="0" class="fc-q-footer-input" value="${r.bonus ?? 5}"
+                 oninput="updateReward(${idx}, 'bonus', Number(this.value))"> p
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderQuestionCardEditable(r, idx) {
+  if (!Array.isArray(r.options)) r.options = ['', '', '', ''];
+  while (r.options.length < 4) r.options.push('');
+  const correct = r.correct ?? 0;
+
+  return `
+    <div class="fc-question-card">
+      <div class="fc-card-header">
+        <span class="fc-card-icon">?</span>
+        <span class="fc-card-title">Spørsmål</span>
+        <span class="fc-card-tag">Quiz</span>
+      </div>
+      <div class="fc-card-body">
+        <div class="fc-question-text">
+          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Skriv spørsmålet her"
+                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
+        </div>
+        <div class="fc-q-options">
           ${[0,1,2,3].map(j => `
-            <input type="text" value="${escapeHtml((r.options || [])[j] || '')}"
-                   placeholder="Alternativ ${'ABCD'[j]}"
-                   oninput="updateRewardOption(${idx}, ${j}, this.value)"
-                   style="margin-bottom:4px;">
+            <label class="fc-q-option ${correct === j ? 'correct' : ''}">
+              <input type="radio" name="q-correct-${idx}" ${correct === j ? 'checked' : ''} onchange="updateReward(${idx}, 'correct', ${j});renderCoordDetail();" style="display:none;">
+              <span class="fc-q-letter" onclick="this.parentElement.querySelector('input').click()">${'ABCD'[j]}</span>
+              <input type="text" class="fc-q-input" value="${escapeHtml(r.options[j] || '')}"
+                     placeholder="Svaralternativ ${'ABCD'[j]}"
+                     oninput="updateRewardOption(${idx}, ${j}, this.value)">
+              <button type="button" class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:10px;${correct === j ? 'opacity:0.4;' : ''}"
+                      onclick="updateReward(${idx}, 'correct', ${j});renderCoordDetail();">${correct === j ? '✓ Riktig' : 'Sett riktig'}</button>
+            </label>
           `).join('')}
         </div>
-      </div>
-    `;
-  }
-  if (r.type === 'clue') {
-    return `
-      <div class="reward-item r-clue">
-        <div class="reward-item-header">
-          <span class="reward-type-badge t-clue">${typeLabels[r.type]}</span>
-          <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})">✕</button>
-        </div>
-        <div class="field">
-          <label class="field-label">Tittel (valgfri)</label>
-          <input type="text" value="${escapeHtml(r.title || '')}" oninput="updateReward(${idx}, 'title', this.value)">
-        </div>
-        <div class="field">
-          <label class="field-label">Spor-tekst</label>
-          <textarea oninput="updateReward(${idx}, 'text', this.value)" rows="3">${escapeHtml(r.text || '')}</textarea>
-        </div>
-        <div class="field">
-          <label class="field-label">Notat (valgfritt)</label>
-          <input type="text" value="${escapeHtml(r.note || '')}" oninput="updateReward(${idx}, 'note', this.value)">
+        <div class="fc-q-footer">
+          <span>Poeng:</span>
+          <input type="number" min="0" class="fc-q-footer-input" value="${r.points ?? 5}"
+                 oninput="updateReward(${idx}, 'points', Number(this.value))">
         </div>
       </div>
-    `;
-  }
-  if (r.type === 'poi') {
-    return `
-      <div class="reward-item r-poi">
-        <div class="reward-item-header">
-          <span class="reward-type-badge t-poi">${typeLabels[r.type]}</span>
-          <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})">✕</button>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label class="field-label">Navn</label>
-            <input type="text" value="${escapeHtml(r.name || '')}" oninput="updateReward(${idx}, 'name', this.value)">
-          </div>
-          <div class="field">
-            <label class="field-label">Undertittel</label>
-            <input type="text" value="${escapeHtml(r.subtitle || '')}" oninput="updateReward(${idx}, 'subtitle', this.value)">
-          </div>
-        </div>
-        <div class="field">
-          <label class="field-label">Notat</label>
-          <textarea oninput="updateReward(${idx}, 'note', this.value)" rows="2">${escapeHtml(r.note || '')}</textarea>
-        </div>
-      </div>
-    `;
-  }
-  if (r.type === 'unlock') {
-    return `
-      <div class="reward-item r-unlock">
-        <div class="reward-item-header">
-          <span class="reward-type-badge t-unlock">${typeLabels[r.type]}</span>
-          <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})">✕</button>
-        </div>
-        <div class="field">
-          <label class="field-label">Tittel</label>
-          <input type="text" value="${escapeHtml(r.title || '')}" placeholder="F.eks. Hengelås på safe" oninput="updateReward(${idx}, 'title', this.value)">
-        </div>
-        <div class="field">
-          <label class="field-label">Instruksjon</label>
-          <textarea oninput="updateReward(${idx}, 'text', this.value)" rows="2">${escapeHtml(r.text || '')}</textarea>
-        </div>
-        <div class="field">
-          <label class="field-label">Bonuspoeng ved bekreftelse</label>
-          <input type="number" min="0" value="${r.bonus ?? 5}" oninput="updateReward(${idx}, 'bonus', Number(this.value))">
-        </div>
-      </div>
-    `;
-  }
-  return '';
+    </div>
+  `;
+}
+
+function changeRewardType(idx, newType) {
+  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
+  if (!c) return;
+  const old = c.rewards[idx];
+  // Behold tekstfelt der det gir mening
+  const preserved = { text: old.text, note: old.note };
+  const defaults = {
+    question: { type: 'question', text: preserved.text || '', options: ['', '', '', ''], correct: 0, points: 5 },
+    clue: { type: 'clue', title: '', text: preserved.text || '', note: preserved.note || '' },
+    poi: { type: 'poi', name: '', subtitle: '', note: preserved.note || '' },
+    unlock: { type: 'unlock', title: '', text: preserved.text || '', bonus: 5 },
+  };
+  c.rewards[idx] = defaults[newType];
+  renderCoordDetail();
 }
 
 function addReward(type) {
@@ -1320,7 +1711,7 @@ function addReward(type) {
     unlock: { type: 'unlock', title: '', text: '', bonus: 5 },
   };
   c.rewards.push(defaults[type]);
-  $('#reward-list').innerHTML = renderRewards(c.rewards);
+  renderCoordDetail();
   renderCoordList();
 }
 
@@ -1328,6 +1719,16 @@ function updateReward(idx, field, value) {
   const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
   if (!c || !c.rewards[idx]) return;
   c.rewards[idx][field] = value;
+}
+
+// Spesiell variant for editable spans (tekst kommer fra textContent og kan være tom)
+function updateRewardEditable(idx, field, value) {
+  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
+  if (!c || !c.rewards[idx]) return;
+  c.rewards[idx][field] = value;
+  // Oppdater data-empty attribute for placeholder-visning
+  const el = event && event.target;
+  if (el) el.setAttribute('data-empty', value ? 'false' : 'true');
 }
 
 function updateRewardOption(idx, optIdx, value) {
@@ -1340,27 +1741,31 @@ function updateRewardOption(idx, optIdx, value) {
 function removeReward(idx) {
   const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
   if (!c) return;
+  if (!confirm('Fjerne denne belønningen?')) return;
   c.rewards.splice(idx, 1);
-  $('#reward-list').innerHTML = renderRewards(c.rewards);
+  renderCoordDetail();
   renderCoordList();
 }
 
+/* ─── LAGRING ─── */
 async function saveScenario() {
-  // Hent meta-felt fra DOM
-  const name = $('#sc-meta-name').value.trim();
-  const description = $('#sc-meta-desc').value.trim();
-  const timeMin = parseInt($('#sc-meta-time').value, 10) || 60;
+  const name = $('#sc-meta-name')?.value.trim();
+  const description = $('#sc-meta-desc')?.value.trim();
+  const timeMin = parseInt($('#sc-meta-time')?.value, 10) || 60;
 
-  // Hent settings
-  const s = scenarioBuf.scenario_data.settings || {};
-  s.time_limit_enabled = $('#set-time-en').checked;
-  s.show_score = $('#set-show-score').checked;
-  s.penalty_enabled = $('#set-pen-en').checked;
-  s.penalty_amount = parseInt($('#set-pen-amount').value, 10) || 0;
-  s.penalty_escalation = $('#set-pen-esc').checked;
-  s.penalty_escalation_after = parseInt($('#set-pen-after').value, 10) || 3;
-  s.penalty_escalation_amount = parseInt($('#set-pen-esc-amount').value, 10) || 2;
-  scenarioBuf.scenario_data.settings = s;
+  // Settings (kun hvis settings-tab er rendret minst én gang)
+  const setEl = $('#set-time-en');
+  if (setEl) {
+    const s = scenarioBuf.scenario_data.settings || {};
+    s.time_limit_enabled = setEl.checked;
+    s.show_score = $('#set-show-score').checked;
+    s.penalty_enabled = $('#set-pen-en').checked;
+    s.penalty_amount = parseInt($('#set-pen-amount').value, 10) || 0;
+    s.penalty_escalation = $('#set-pen-esc').checked;
+    s.penalty_escalation_after = parseInt($('#set-pen-after').value, 10) || 3;
+    s.penalty_escalation_amount = parseInt($('#set-pen-esc-amount').value, 10) || 2;
+    scenarioBuf.scenario_data.settings = s;
+  }
 
   if (!name) { showToast('Navn påkrevd', 'error'); return; }
 

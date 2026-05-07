@@ -33,6 +33,7 @@
         <div class="text-center muted" style="font-size:12px;margin-top:4px;">
           Glemt passord? Kontakt din administrator.
         </div>
+        <div class="text-center muted" id="env-indicator" style="font-size:10px;margin-top:8px;letter-spacing:0.1em;text-transform:uppercase;"></div>
       </div>
     </form>
   </div>
@@ -73,7 +74,6 @@
       <div class="nav-item" data-view="profile"><span class="nav-icon">◐</span> Min profil</div>
     </nav>
 
-    <!-- Content area: each view is a hidden section, swapped by router -->
     <main id="content">
       <section class="view" data-view="dashboard"></section>
       <section class="view hidden" data-view="events"></section>
@@ -102,13 +102,33 @@
 <!-- ─── TOAST ─── -->
 <div id="toast-container"></div>
 
-<!-- App config -->
+<!-- App config — automatisk veksling mellom localhost og prod -->
 <script>
-window.APP_CONFIG = {
-  API_BASE: 'https://escape-box-production.up.railway.app',
-  WS_URL:   'wss://escape-box-production.up.railway.app/ws',
-  PARTICIPANT_URL: 'https://escape-box.netlify.app'
-};
+(function() {
+  var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (isLocal) {
+    window.APP_CONFIG = {
+      API_BASE: 'http://localhost:3000',
+      WS_URL:   'ws://localhost:3000/ws',
+      PARTICIPANT_URL: 'http://localhost:5173',
+      ENV: 'lokal'
+    };
+  } else {
+    window.APP_CONFIG = {
+      API_BASE: 'https://escape-box-production.up.railway.app',
+      WS_URL:   'wss://escape-box-production.up.railway.app/ws',
+      PARTICIPANT_URL: 'https://escape-box.netlify.app',
+      ENV: 'prod'
+    };
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    var el = document.getElementById('env-indicator');
+    if (el && window.APP_CONFIG.ENV === 'lokal') {
+      el.textContent = '◆ Lokal utvikling';
+      el.style.color = '#b86c00';
+    }
+  });
+})();
 </script>
 <script src="app.js"></script>
 
