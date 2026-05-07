@@ -1592,29 +1592,59 @@ function renderScBoardTab() {
       </div>
 
       <div class="board-canvas-wrap" id="board-canvas-wrap">
-        <div class="board-canvas-toolbar">
-          <button class="bb-tool-btn" onclick="zoomBoardOut()" title="Zoom ut">\u2212</button>
-          <button class="bb-tool-btn bb-tool-zoom" onclick="resetBoardZoom()" title="Tilbakestill zoom" id="bb-zoom-pct">100%</button>
-          <button class="bb-tool-btn" onclick="zoomBoardIn()" title="Zoom inn">+</button>
-          <button class="bb-tool-btn bb-tool-fit" onclick="fitBoardToView()" title="Tilpass til skjerm">\u26f6</button>
-          <button class="bb-tool-btn bb-tool-fs" onclick="toggleBoardFullscreen()" title="Fullskjerm" id="bb-fs-btn">\u26f6 Fullskjerm</button>
-        </div>
         <div class="board-canvas-scroll" id="board-canvas-scroll">
           <div class="board-canvas-inner" id="board-canvas-inner">
             <!-- SVG injiseres her -->
           </div>
         </div>
+        <div class="board-canvas-toolbar">
+          <button class="bb-tool-btn" onclick="zoomBoardOut()" title="Zoom ut">\u2212</button>
+          <button class="bb-tool-btn bb-tool-zoom" onclick="resetBoardZoom()" title="Tilbakestill zoom" id="bb-zoom-pct">100%</button>
+          <button class="bb-tool-btn" onclick="zoomBoardIn()" title="Zoom inn">+</button>
+          <button class="bb-tool-btn" onclick="fitBoardToView()" title="Tilpass til skjerm">\u26f6 Tilpass</button>
+          <button class="bb-tool-btn bb-tool-fs" onclick="toggleBoardFullscreen()" title="Fullskjerm" id="bb-fs-btn">\u26f6 Fullskjerm</button>
+        </div>
       </div>
     </div>
     <style>
-      .board-canvas-wrap { position:relative; }
+      .board-builder { position:relative; }
+      /* Fullskjerm legges p\u00e5 board-builder slik at sidefelt + canvas vises sammen */
+      .board-builder.is-fullscreen {
+        position:fixed; inset:0; z-index:9999;
+        background:var(--bg);
+        padding:14px;
+        overflow:hidden;
+      }
+      .board-builder.is-fullscreen .board-sidebar {
+        max-height:calc(100vh - 28px);
+        overflow-y:auto;
+      }
+      .board-builder.is-fullscreen .board-canvas-wrap {
+        height:calc(100vh - 28px);
+      }
+
+      .board-canvas-wrap {
+        position:relative;
+        display:flex; flex-direction:column;
+      }
+      .board-canvas-scroll {
+        flex:1;
+        overflow:auto;
+        max-height:calc(100vh - 280px);
+      }
+      .board-builder.is-fullscreen .board-canvas-scroll {
+        max-height:none;
+      }
+      .board-canvas-inner {
+        transform-origin: 0 0;
+        transition: transform 0.12s ease-out;
+      }
       .board-canvas-toolbar {
-        position:sticky; top:0; z-index:10;
+        flex-shrink:0;
         display:flex; gap:6px; align-items:center;
         padding:8px 10px;
-        background:rgba(250,248,243,0.95);
-        border-bottom:1px solid var(--rule);
-        backdrop-filter:blur(4px);
+        background:rgba(250,248,243,0.96);
+        border-top:1px solid var(--rule);
       }
       .bb-tool-btn {
         background:var(--paper); border:1px solid var(--rule); color:var(--ink);
@@ -1626,23 +1656,6 @@ function renderScBoardTab() {
       .bb-tool-btn:active { transform:translateY(1px); }
       .bb-tool-zoom { min-width:60px; font-family:var(--font-mono); }
       .bb-tool-fs { margin-left:auto; }
-      .board-canvas-scroll {
-        overflow:auto;
-        max-height:calc(100vh - 240px);
-      }
-      .board-canvas-inner {
-        transform-origin: 0 0;
-        transition: transform 0.12s ease-out;
-      }
-      /* Fullskjerm-modus: utnytter hele viewporten */
-      .board-canvas-wrap.is-fullscreen {
-        position:fixed; inset:0; z-index:9999;
-        background:#fbfaf6; padding:0;
-        display:flex; flex-direction:column;
-      }
-      .board-canvas-wrap.is-fullscreen .board-canvas-scroll {
-        max-height:none; flex:1;
-      }
     </style>
   `;
 }
@@ -1713,24 +1726,22 @@ function fitBoardToView() {
 }
 
 function toggleBoardFullscreen() {
-  const wrap = $('#board-canvas-wrap');
-  if (!wrap) return;
+  // Fullskjerm legges p\u00e5 board-builder (sidefelt + canvas) slik at hele
+  // arbeidsflaten utvides. Bruker en CSS-klasse for forutsigbar oppf\u00f8rsel
+  // inni modaler — native Fullscreen API legges til som tillegg.
+  const builder = document.querySelector('.board-builder');
+  if (!builder) return;
 
-  // Native Fullscreen API er st\u00f8ttet i moderne browsere, men for at
-  // fullskjermen skal v\u00e6re forutsigbar inni en modal bruker vi en
-  // CSS-basert fallback (position:fixed) parallelt. Dette gir oss
-  // konsistent oppf\u00f8rsel uansett om browseren tillater native FS.
   if (!boardState.fullscreen) {
-    wrap.classList.add('is-fullscreen');
+    builder.classList.add('is-fullscreen');
     boardState.fullscreen = true;
     const btn = $('#bb-fs-btn');
-    if (btn) btn.textContent = '\u2715 Lukk';
-    // Pr\u00f8v native FS \u00f8verst, men det er greit om det feiler
-    if (wrap.requestFullscreen) {
-      wrap.requestFullscreen().catch(() => { /* native fs er valgfritt */ });
+    if (btn) btn.textContent = '\u2715 Lukk fullskjerm';
+    if (builder.requestFullscreen) {
+      builder.requestFullscreen().catch(() => { /* native fs er valgfritt */ });
     }
   } else {
-    wrap.classList.remove('is-fullscreen');
+    builder.classList.remove('is-fullscreen');
     boardState.fullscreen = false;
     const btn = $('#bb-fs-btn');
     if (btn) btn.textContent = '\u26f6 Fullskjerm';
