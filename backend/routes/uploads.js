@@ -141,4 +141,40 @@ router.delete('/image', requireRole('superadmin'), async (req, res) => {
   }
 });
 
+/* ─── GET /api/uploads/proxy ──────────────────────────────
+   Proxy for Dropbox shared links. Brukes av frontend n\u00e5r SVG → PNG
+   konverteres: fetch() direkte mot Dropbox shared links kan feile p\u00e5
+   grunn av CORS-headers, eller redirects til dl.dropboxusercontent.com
+   som ikke har CORS satt for alle origins. Backend henter bildet og
+   returnerer det med CORS=*.
+
+   Eksempel: GET /api/uploads/proxy?url=https://www.dropbox.com/...
+*/
+router.get('/proxy', requireRole('superadmin'), async (req, res) => {
+  const url = req.query.url;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url-parameter p\u00e5krevd' });
+  }
+  // Sikkerhets-sjekk: bare tillat Dropbox-URLer
+  if (!/^https:\/\/(www\.)?dropbox\.com\/|^https:\/\/dl\.dropboxusercontent\.com\//i.test(url)) {
+    return res.status(400).json({ error: 'Kun Dropbox-URLer er tillatt' });
+  }
+  try {
+    // Node 20+ har innebygd fetch
+    const r = await fetch(url, { redirect: 'follow' });
+    if (!r.ok) {
+      return res.status(r.status).json({ error: `Upstream returnerte ${r.status}` });
+    }
+    const buffer = Buffer.from(await r.arrayBuffer());
+    const contentType = r.headers.get('content-type') || 'application/octet-stream';
+    res.set('Content-Type', contentType);
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=600');
+    res.send(buffer);
+  } catch (e) {
+    console.error('Proxy-feil:', e);
+    res.status(500).json({ error: e.message || 'Server feil' });
+  }
+});
+
 module.exports = router;

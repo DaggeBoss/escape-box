@@ -282,8 +282,9 @@ async function svgToPngBlob(svgString, width, height, bgColor = '#ffffff') {
   }
 }
 
-/* Henter alle <image href="..."> i SVG-en, fetcher dem og bytter til
-   data-URL. Dette unngår tainted canvas-feil ved drawImage.
+/* Henter alle <image href="..."> i SVG-en, fetcher dem (via backend-proxy
+   for å unngå CORS-problemer) og bytter til data-URL. Dette unngår
+   tainted canvas-feil ved drawImage senere.
 */
 async function embedExternalImagesInSvg(svgString) {
   const re = /(<image[^>]*\shref=["'])([^"']+)(["'])/g;
@@ -294,11 +295,18 @@ async function embedExternalImagesInSvg(svgString) {
   }
   if (matches.length === 0) return svgString;
 
-  // Hent alle bilder parallelt
+  // Hent alle bilder parallelt via backend-proxy.
+  // Direkte fetch mot Dropbox shared links feiler ofte p\u00e5 grunn av CORS
+  // (Dropbox redirecter til dl.dropboxusercontent.com som ikke har CORS for
+  // alle origins). Backend-proxy henter bildet server-side og sender
+  // det videre med CORS=*.
   const replacements = await Promise.all(matches.map(async match => {
     if (match.url.startsWith('data:')) return match;  // allerede embed
     try {
-      const res = await fetch(match.url);
+      const proxyUrl = `${API}/api/uploads/proxy?url=${encodeURIComponent(match.url)}`;
+      const headers = state.token ? { Authorization: `Bearer ${state.token}` } : {};
+      const res = await fetch(proxyUrl, { headers });
+      if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
       const blob = await res.blob();
       const dataUrl = await new Promise((resolve, reject) => {
         const r = new FileReader();
