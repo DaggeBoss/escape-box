@@ -130,10 +130,9 @@ async function uploadImage(file, opts = {}) {
   // Komprimer hovedbilde + lag thumbnail
   // GIF passerer uten komprimering (mister ellers animasjon)
   let blob, thumbBlob;
-  let filename = file.name || 'image.jpg';
-  if (file.type === 'image/gif') {
+  let filename = opts.filename || file.name || 'image.jpg';
+  if (file.type === 'image/gif' && !opts.filename) {
     blob = file;
-    // Lag fortsatt thumbnail som JPEG (mister animasjon, men det er ok for thumb)
     if (thumbWidth > 0) {
       thumbBlob = await compressImage(file, { maxWidth: thumbWidth, quality: thumbQuality });
     }
@@ -142,7 +141,10 @@ async function uploadImage(file, opts = {}) {
     if (thumbWidth > 0) {
       thumbBlob = await compressImage(file, { maxWidth: thumbWidth, quality: thumbQuality });
     }
-    filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+    // Hvis filename er gitt av kaller, bruk det som-er. Ellers konverter til .jpg
+    if (!opts.filename) {
+      filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+    }
   }
 
   const form = new FormData();
@@ -152,8 +154,8 @@ async function uploadImage(file, opts = {}) {
   }
   form.append('scenario_id', String(opts.scenario_id));
   form.append('kind', kind);
+  if (opts.overwrite) form.append('overwrite', 'true');
 
-  // XMLHttpRequest brukes istedenfor fetch for progress-events
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', API + '/api/uploads/image');
@@ -3170,17 +3172,30 @@ async function addImageLayer(input) {
   }
   try {
     showToast('Laster opp...', 'info');
+    // Beregn neste lag-nummer for dette kortet. Brukes som suffix i filnavnet
+    // slik at flere bildelag p\u00e5 samme kort f\u00e5r unike navn:
+    //   Grid-kortnavn-1.jpg, Grid-kortnavn-2.jpg, ...
+    // Vi teller eksisterende bildelag + 1; hvis lag senere slettes oppst\u00e5r
+    // hull i nummereringen, men det er greit \u2014 filnavnet er bare arkivnavn.
+    templateBuf.content.layers = templateBuf.content.layers || [];
+    const existingImageLayers = templateBuf.content.layers.filter(l => l.type === 'image').length;
+    const layerNum = existingImageLayers + 1;
+    const baseFilename = buildCardExportFilename(templateBuf).replace(/\.png$/i, '');
+    const filename = `${baseFilename}-${layerNum}.jpg`;
+
     const result = await uploadImage(file, {
       scenario_id: state.currentScenarioId,
-      kind: 'cards',
+      kind: 'originals',
+      filename,
+      overwrite: true,
     });
-    templateBuf.content.layers = templateBuf.content.layers || [];
     templateBuf.content.layers.push({
       type: 'image',
       url: result.url,
       path: result.path,
       thumb_url: result.thumb_url || result.url,
       thumb_path: result.thumb_path || null,
+      original_num: layerNum,  // brukes til navngiving ved re-opplasting
       x_pct: 10, y_pct: 10, w_pct: 80, h_pct: 70,
     });
     templateSelectedLayer = templateBuf.content.layers.length - 1;

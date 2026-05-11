@@ -283,7 +283,7 @@ function cleanFilename(name) {
 
 function buildScenarioImagePath(scenarioId, kind, originalFilename) {
   // kind: 'coords' | 'cards' | 'backgrounds'
-  const validKinds = ['coords', 'cards', 'backgrounds'];
+  const validKinds = ['coords', 'cards', 'backgrounds', 'originals'];
   if (!validKinds.includes(kind)) {
     throw new Error(`Ugyldig bilde-kind: ${kind}. Må være en av ${validKinds.join(', ')}`);
   }
