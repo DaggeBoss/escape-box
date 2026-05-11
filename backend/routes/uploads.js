@@ -151,10 +151,15 @@ router.delete('/image', requireRole('superadmin'), async (req, res) => {
    Eksempel: GET /api/uploads/proxy?url=https://www.dropbox.com/...
 */
 router.get('/proxy', requireRole('superadmin'), async (req, res) => {
-  const url = req.query.url;
+  let url = req.query.url;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'url-parameter p\u00e5krevd' });
   }
+  // SVG-serialisering forvandler & til &amp; n\u00e5r URL-en ligger som
+  // attributt p\u00e5 et <image>-element. Det betyr at URL-en kan komme inn
+  // hit med &amp; i stedet for &. Dekod HTML-entiteter f\u00f8r vi fetcher.
+  url = url.replace(/&amp;/g, '&').replace(/&#38;/g, '&');
+
   // Sikkerhets-sjekk: bare tillat Dropbox-URLer
   if (!/^https:\/\/(www\.)?dropbox\.com\/|^https:\/\/dl\.dropboxusercontent\.com\//i.test(url)) {
     return res.status(400).json({ error: 'Kun Dropbox-URLer er tillatt' });

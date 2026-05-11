@@ -302,8 +302,11 @@ async function embedExternalImagesInSvg(svgString) {
   // det videre med CORS=*.
   const replacements = await Promise.all(matches.map(async match => {
     if (match.url.startsWith('data:')) return match;  // allerede embed
+    // Dekod HTML-entiteter siden URL-en er hentet fra SVG-attributt
+    // der & blir til &amp; ved serialisering.
+    const cleanUrl = match.url.replace(/&amp;/g, '&').replace(/&#38;/g, '&');
     try {
-      const proxyUrl = `${API}/api/uploads/proxy?url=${encodeURIComponent(match.url)}`;
+      const proxyUrl = `${API}/api/uploads/proxy?url=${encodeURIComponent(cleanUrl)}`;
       const headers = state.token ? { Authorization: `Bearer ${state.token}` } : {};
       const res = await fetch(proxyUrl, { headers });
       if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
@@ -316,7 +319,7 @@ async function embedExternalImagesInSvg(svgString) {
       });
       return { ...match, dataUrl };
     } catch (e) {
-      console.warn('Kunne ikke embedde bilde:', match.url, e.message);
+      console.warn('Kunne ikke embedde bilde:', cleanUrl, e.message);
       return null;
     }
   }));
