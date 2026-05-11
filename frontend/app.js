@@ -1406,6 +1406,13 @@ async function openScenarioEditor(scenarioId) {
     size: 'xl',
     body: renderScenarioEditor(),
     footer: `
+      <div id="sc-zoom-controls" class="sc-zoom-controls ${activeScTab === 'board' ? '' : 'hidden'}">
+        <button class="bb-tool-btn" onclick="zoomBoardOut()" title="Zoom ut">\u2212</button>
+        <button class="bb-tool-btn bb-tool-zoom" onclick="resetBoardZoom()" title="Tilbakestill zoom" id="bb-zoom-pct">100%</button>
+        <button class="bb-tool-btn" onclick="zoomBoardIn()" title="Zoom inn">+</button>
+        <button class="bb-tool-btn" onclick="fitBoardToView()" title="Tilpass til skjerm">\u26f6 Tilpass</button>
+        <button class="bb-tool-btn" onclick="toggleBoardFullscreen()" title="Fullskjerm" id="bb-fs-btn">\u26f6 Fullskjerm</button>
+      </div>
       <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
       <button class="btn btn-secondary" onclick="testCurrentScenario()" title="Åpne i deltagerfrontend uten å lagre">▶ Test scenario</button>
       <button class="btn btn-success" onclick="saveScenario()">⤳ Lagre endringer</button>
@@ -1449,6 +1456,9 @@ function switchScTab(name) {
   $$('#modal .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('#modal .sc-tab').forEach(t => t.classList.add('hidden'));
   $('#sc-tab-' + name).classList.remove('hidden');
+  // Zoom-kontrollene i footer er kun relevante p\u00e5 board-fanen
+  const zoomCtrls = $('#sc-zoom-controls');
+  if (zoomCtrls) zoomCtrls.classList.toggle('hidden', name !== 'board');
   if (name === 'board') renderBoard();
   if (name === 'coords') {
     renderCoordList();
@@ -1597,13 +1607,6 @@ function renderScBoardTab() {
             <!-- SVG injiseres her -->
           </div>
         </div>
-        <div class="board-canvas-toolbar">
-          <button class="bb-tool-btn" onclick="zoomBoardOut()" title="Zoom ut">\u2212</button>
-          <button class="bb-tool-btn bb-tool-zoom" onclick="resetBoardZoom()" title="Tilbakestill zoom" id="bb-zoom-pct">100%</button>
-          <button class="bb-tool-btn" onclick="zoomBoardIn()" title="Zoom inn">+</button>
-          <button class="bb-tool-btn" onclick="fitBoardToView()" title="Tilpass til skjerm">\u26f6 Tilpass</button>
-          <button class="bb-tool-btn bb-tool-fs" onclick="toggleBoardFullscreen()" title="Fullskjerm" id="bb-fs-btn">\u26f6 Fullskjerm</button>
-        </div>
       </div>
     </div>
     <style>
@@ -1639,13 +1642,13 @@ function renderScBoardTab() {
         transform-origin: 0 0;
         transition: transform 0.12s ease-out;
       }
-      .board-canvas-toolbar {
-        flex-shrink:0;
+
+      /* Zoom-kontrollene plasseres i modal-footer til venstre for handlingsknappene */
+      .sc-zoom-controls {
         display:flex; gap:6px; align-items:center;
-        padding:8px 10px;
-        background:rgba(250,248,243,0.96);
-        border-top:1px solid var(--rule);
+        margin-right:auto;  /* dytter handlingsknappene til h\u00f8yre */
       }
+      .sc-zoom-controls.hidden { display:none; }
       .bb-tool-btn {
         background:var(--paper); border:1px solid var(--rule); color:var(--ink);
         font-family:var(--font-cond); font-size:13px; font-weight:700;
@@ -1655,7 +1658,6 @@ function renderScBoardTab() {
       .bb-tool-btn:hover { background:var(--blue-bg); border-color:var(--blue); }
       .bb-tool-btn:active { transform:translateY(1px); }
       .bb-tool-zoom { min-width:60px; font-family:var(--font-mono); }
-      .bb-tool-fs { margin-left:auto; }
     </style>
   `;
 }
