@@ -2145,7 +2145,9 @@ function renderCardsList() {
   const stashCards = cards.filter(c => c.in_stash);
 
   const renderItem = (c, inStash) => {
-    const thumbSrc = c.thumb_url || c.image_url || c.image_path || c.export_url;
+    // Foretrekk export_thumb_url for template-kort \u2014 det er hele kortet rendret i
+    // lav opp\u0142 (rask lasting). Faller tilbake til legacy bilde-thumb for eldre kort.
+    const thumbSrc = c.export_thumb_url || c.export_url || c.thumb_url || c.image_url || c.image_path;
     const isTemplate = c.type === 'template';
     const thumbStyle = thumbSrc && !c.uploading
       ? `background-image:url('${escapeHtml(thumbSrc)}');background-size:cover;background-position:center;`
@@ -2599,7 +2601,12 @@ function renderTemplateEditor() {
       .te-zone-header { top:0; display:flex; align-items:center; justify-content:space-between; padding:0 8%; }
       .te-zone-footer { bottom:0; display:flex; align-items:center; gap:6px; padding:0 8%; }
       .te-zone-content { background-clip:padding-box; }
-      .te-header-title { font-family:var(--font-serif); font-weight:700; }
+      .te-header-title {
+        font-family:var(--font-serif); font-weight:700;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        flex:1; min-width:0;  /* la flex kollapse til mindre enn intrinsic */
+      }
+      .te-header-code-badge { flex-shrink:0; }
       .te-header-code { font-family:var(--font-mono); font-weight:500; letter-spacing:0.1em; }
       .te-footer-item { display:inline-flex; align-items:center; }
       .te-grid-overlay { position:absolute; top:0; left:0; right:0; bottom:0; pointer-events:none; }
@@ -2741,7 +2748,7 @@ function renderTemplateCanvas() {
   const contentH = height - headerH - footerH;
 
   // Beregn pikselstørrelser for tekst i header/footer basert på sone-høyde
-  const headerFontSize = Math.max(11, Math.round(headerH * 0.42));
+  const headerFontSize = Math.max(11, Math.round(headerH * 0.34));
   const footerFontSize = Math.max(10, Math.round(footerH * 0.45));
 
   let html = `<div class="te-card" style="width:${width}px;height:${height}px;background:${templateBuf.content.bg_color};">`;
@@ -3359,11 +3366,22 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
 
   // Header
   s += `<rect x="${cx}" y="${cy}" width="${cw}" height="${headerH}" fill="${card.header.bg_color}" pointer-events="none"/>`;
-  const headerFz = Math.max(7, headerH * 0.42);
-  s += `<text x="${cx + cw * 0.06}" y="${cy + headerH/2}" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}" pointer-events="none">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
-  // 4-kode i markert badge
+
+  // Header-tittel: dynamisk skala basert p\u00e5 tittellengde (matcher eksport-versjonen)
+  const tboTitle = (card.header.title || '').slice(0, 40);
+  const tboBaseHeaderFz = Math.max(7, headerH * 0.34);
+  const tboTitleAreaWidth = cw * 0.65;
+  const tboEstimatedWidth = tboTitle.length * tboBaseHeaderFz * 0.55;
+  const tboScaleDown = tboEstimatedWidth > tboTitleAreaWidth
+    ? tboTitleAreaWidth / tboEstimatedWidth
+    : 1;
+  const headerFz = Math.max(7, tboBaseHeaderFz * tboScaleDown);
+
+  s += `<text x="${cx + cw * 0.06}" y="${cy + headerH/2}" dominant-baseline="middle" font-family="var(--font-serif)" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}" pointer-events="none">${escapeHtml(tboTitle)}</text>`;
+
+  // 4-kode-badge med stabil st\u00f8rrelse
   if (card.header.code) {
-    const codeFz = headerFz * 0.78;
+    const codeFz = Math.max(7, headerH * 0.32);
     const padX = codeFz * 0.5;
     const padY = codeFz * 0.15;
     const codeText = (card.header.code || '').slice(0, 6);
@@ -3440,7 +3458,12 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
 // PNG-st\u00f8rrelsen blir s\u00e5ledes (cols \u00d7 PX_PER_CELL) \u00d7 (rows \u00d7 PX_PER_CELL).
 // 5\u00d77 kort  \u2192 300\u00d7420 px
 // 14\u00d710 kort \u2192 840\u00d7600 px
-const CARD_EXPORT_PX_PER_CELL = 60;
+// PNG-oppl\u00f8sning per grid-rute. 200 px gir god lesbarhet og rimelig filst\u00f8rrelse.
+// 5\u00d77 kort  \u2192 1000\u00d71400 px
+// 14\u00d710 kort \u2192 2800\u00d72000 px
+// Thumb genereres med THUMB_PX_PER_CELL (lavere) for rask kortliste-visning.
+const CARD_EXPORT_PX_PER_CELL = 200;
+const CARD_THUMB_PX_PER_CELL = 50;
 
 /* Returnerer ren SVG-streng for ett template-kort, klart for PNG-konvertering.
    Dimensjoner f\u00f8lger kortets cols \u00d7 rows. Hver rute er PX_PER_CELL piksler.
@@ -3486,12 +3509,25 @@ function renderTemplateCardForExport(card) {
 
   // Header
   s += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${card.header.bg_color}"/>`;
-  const headerFz = Math.max(7, headerH * 0.42);
-  s += `<text x="${W * 0.06}" y="${headerH/2}" dominant-baseline="middle" font-family="Georgia, serif" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}">${escapeHtml((card.header.title || '').slice(0, 30))}</text>`;
 
-  // 4-kode badge
+  // Header-tittel: dynamisk fontst\u00f8rrelse basert p\u00e5 b\u00e5de header-h\u00f8yden
+  // og tittel-lengden. Lengre titler f\u00e5r mindre font slik at de f\u00e5r plass.
+  const title = (card.header.title || '').slice(0, 40);
+  const baseHeaderFz = Math.max(7, headerH * 0.34);  // mindre default (0.34 vs 0.42)
+  // Anta at 4-koden tar ca 25% av bredden, s\u00e5 tittel-omr\u00e5det er ca 65%
+  const titleAreaWidth = W * 0.65;
+  // Grov estimat: hver tegn er ~0.55 \u00d7 fontH bred. Skaler ned hvis n\u00f8dvendig.
+  const estimatedWidth = title.length * baseHeaderFz * 0.55;
+  const scaleDown = estimatedWidth > titleAreaWidth
+    ? titleAreaWidth / estimatedWidth
+    : 1;
+  const headerFz = Math.max(7, baseHeaderFz * scaleDown);
+
+  s += `<text x="${W * 0.06}" y="${headerH/2}" dominant-baseline="middle" font-family="Georgia, serif" font-size="${headerFz}" font-weight="700" fill="${card.header.text_color}">${escapeHtml(title)}</text>`;
+
+  // 4-kode badge \u2014 beholder en stabil st\u00f8rrelse uavhengig av tittellengde
   if (card.header.code) {
-    const codeFz = headerFz * 0.78;
+    const codeFz = Math.max(7, headerH * 0.32);
     const padX = codeFz * 0.5;
     const padY = codeFz * 0.15;
     const codeText = (card.header.code || '').slice(0, 6);
@@ -3645,42 +3681,65 @@ async function exportCardPng(card) {
   if (!card || card.type !== 'template') return null;
   if (!state.currentScenarioId) return null;
   try {
-    // Beregn faktisk PNG-st\u00f8rrelse fra kortets dimensjoner.
-    // Hver rute = PX_PER_CELL piksler, totalt cols\u00d7rows ruter.
+    // Generer to st\u00f8rrelser: en full (h\u00f8y opp\u0142, for produksjon/print)
+    // og en thumb (lav opp\u0142, for raske kortliste-visninger).
     const W = (card.cols || 5) * CARD_EXPORT_PX_PER_CELL;
     const H = (card.rows || 7) * CARD_EXPORT_PX_PER_CELL;
+    const tW = (card.cols || 5) * CARD_THUMB_PX_PER_CELL;
+    const tH = (card.rows || 7) * CARD_THUMB_PX_PER_CELL;
     const svg = renderTemplateCardForExport(card);
-    const blob = await svgToPngBlob(svg, W, H, '#ffffff');
+    const [fullBlob, thumbBlob] = await Promise.all([
+      svgToPngBlob(svg, W, H, '#ffffff'),
+      svgToPngBlob(svg, tW, tH, '#ffffff'),
+    ]);
     const filename = buildCardExportFilename(card);
+    const thumbFilename = `thumb-${filename}`;
 
     // Hvis kortet er blitt renamed eller flyttet mellom grid/bunke, vil
     // det nye filnavnet skille seg fra det gamle. Da rydder vi opp i
     // den gamle filen f\u00f8r vi laster opp den nye, slik at vi ikke
     // etterlater foreldrel\u00f8se PNG-er i Dropbox.
     const oldPath = card.export_path;
+    const oldThumbPath = card.export_thumb_path;
     const oldFilename = oldPath ? oldPath.split('/').pop() : null;
     const filenameChanged = oldFilename && oldFilename !== filename;
 
-    const result = await uploadPngBlob(blob, {
-      scenario_id: state.currentScenarioId,
-      kind: 'cards',
-      filename,
-      overwrite: true,  // kritisk: erstatt eksisterende fil med samme path
-    });
+    // Last opp begge parallelt
+    const [fullResult, thumbResult] = await Promise.all([
+      uploadPngBlob(fullBlob, {
+        scenario_id: state.currentScenarioId,
+        kind: 'cards',
+        filename,
+        overwrite: true,
+      }),
+      uploadPngBlob(thumbBlob, {
+        scenario_id: state.currentScenarioId,
+        kind: 'cards',
+        filename: thumbFilename,
+        overwrite: true,
+      }),
+    ]);
 
-    if (result?.url) {
-      card.export_url = result.url;
-      card.export_path = result.path;
+    if (fullResult?.url) {
+      card.export_url = fullResult.url;
+      card.export_path = fullResult.path;
+    }
+    if (thumbResult?.url) {
+      card.export_thumb_url = thumbResult.url;
+      card.export_thumb_path = thumbResult.path;
     }
 
-    // Slett den gamle filen i bakgrunnen (etter at den nye er trygt p\u00e5 plass)
-    if (filenameChanged && oldPath?.startsWith('/Escape Box/')) {
-      deleteImage(oldPath, card.export_url_old).catch(e => {
-        console.warn('Kunne ikke slette gammel kort-PNG:', e.message);
-      });
+    // Rydd gamle filer hvis filnavnet endret seg
+    if (filenameChanged) {
+      if (oldPath?.startsWith('/Escape Box/')) {
+        deleteImage(oldPath).catch(e => console.warn('Slett-feil full:', e.message));
+      }
+      if (oldThumbPath?.startsWith('/Escape Box/')) {
+        deleteImage(oldThumbPath).catch(e => console.warn('Slett-feil thumb:', e.message));
+      }
     }
 
-    return result;
+    return fullResult;
   } catch (e) {
     console.warn('Kort-eksport feilet:', e.message);
     return null;
@@ -3804,6 +3863,7 @@ async function deleteAllCardAssets(card) {
 
   // PNG-eksporter (alle korttyper kan ha disse)
   if (card.export_path) candidates.push({ path: card.export_path, url: card.export_url });
+  if (card.export_thumb_path) candidates.push({ path: card.export_thumb_path, url: card.export_thumb_url });
 
   // Template-kort: bildelag i content
   if (card.type === 'template' && card.content?.layers) {
