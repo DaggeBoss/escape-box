@@ -2599,7 +2599,8 @@ function renderTemplateEditor() {
       .te-zone:hover { outline-color:rgba(26,74,122,0.3); }
       .te-zone.selected { outline-color:var(--blue); }
       .te-zone-header { top:0; display:flex; align-items:center; justify-content:space-between; padding:0 8%; }
-      .te-zone-footer { bottom:0; display:flex; align-items:center; gap:6px; padding:0 8%; }
+      .te-zone-footer { bottom:0; display:flex; align-items:center; gap:8px; padding:0 8%; overflow:hidden; white-space:nowrap; }
+      .te-zone-footer .te-footer-item { flex-shrink:0; }
       .te-zone-content { background-clip:padding-box; }
       .te-header-title {
         font-family:var(--font-serif); font-weight:700;
@@ -3396,13 +3397,37 @@ function renderTemplateOnBoard(card, cx, cy, cw, ch, sel) {
   // Footer
   const fy = cy + ch - footerH;
   s += `<rect x="${cx}" y="${fy}" width="${cw}" height="${footerH}" fill="${card.footer.bg_color}" pointer-events="none"/>`;
-  const footerFz = Math.max(6, footerH * 0.45);
-  let fx = cx + cw * 0.06;
-  (card.footer.items || []).forEach(item => {
-    const txt = item.value || '';
-    s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${item.type === 'symbol' ? footerFz * 1.2 : footerFz}" fill="${card.footer.text_color}" pointer-events="none">${escapeHtml(txt)}</text>`;
-    fx += (item.type === 'symbol' ? footerFz * 1.5 : (txt.length * footerFz * 0.55)) + 6;
-  });
+
+  const tboFooterItems = card.footer.items || [];
+  if (tboFooterItems.length > 0) {
+    const tboBaseFooterFz = Math.max(6, footerH * 0.45);
+    const tboPadX = cw * 0.06;
+    const tboAvailableW = cw - tboPadX * 2;
+    const tboItemGap = tboBaseFooterFz * 0.4;
+
+    let tboEstimatedW = 0;
+    tboFooterItems.forEach((item, i) => {
+      const txt = item.value || '';
+      const itemW = item.type === 'symbol'
+        ? tboBaseFooterFz * 1.4
+        : txt.length * tboBaseFooterFz * 0.55;
+      tboEstimatedW += itemW;
+      if (i < tboFooterItems.length - 1) tboEstimatedW += tboItemGap;
+    });
+
+    const tboFooterScale = tboEstimatedW > tboAvailableW ? tboAvailableW / tboEstimatedW : 1;
+    const footerFz = Math.max(6, tboBaseFooterFz * tboFooterScale);
+    const tboGap = tboItemGap * tboFooterScale;
+
+    let fx = cx + tboPadX;
+    tboFooterItems.forEach(item => {
+      const txt = item.value || '';
+      const isSymbol = item.type === 'symbol';
+      const itemFz = isSymbol ? footerFz * 1.2 : footerFz;
+      s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="var(--font-cond)" font-size="${itemFz}" fill="${card.footer.text_color}" pointer-events="none">${escapeHtml(txt)}</text>`;
+      fx += (isSymbol ? footerFz * 1.4 : txt.length * footerFz * 0.55) + tboGap;
+    });
+  }
 
   // Grid-stiplet på toppen
   for (let r = 1; r < card.rows; r++) {
@@ -3542,13 +3567,40 @@ function renderTemplateCardForExport(card) {
   // Footer
   const fy = H - footerH;
   s += `<rect x="0" y="${fy}" width="${W}" height="${footerH}" fill="${card.footer.bg_color}"/>`;
-  const footerFz = Math.max(6, footerH * 0.45);
-  let fx = W * 0.06;
-  (card.footer.items || []).forEach(item => {
-    const txt = item.value || '';
-    s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="${item.type === 'symbol' ? footerFz * 1.2 : footerFz}" fill="${card.footer.text_color}">${escapeHtml(txt)}</text>`;
-    fx += (item.type === 'symbol' ? footerFz * 1.5 : (txt.length * footerFz * 0.55)) + 6;
-  });
+
+  const footerItems = card.footer.items || [];
+  if (footerItems.length > 0) {
+    // Auto-skaler font slik at alle items f\u00e5r plass i footer-bredden.
+    // Footer-bredde minus padding p\u00e5 begge sider ~= W * 0.88.
+    const baseFooterFz = Math.max(6, footerH * 0.45);
+    const padX = W * 0.06;
+    const availableW = W - padX * 2;
+    const itemGap = baseFooterFz * 0.4;
+
+    // Beregn samlet bredde for items ved base-st\u00f8rrelse
+    let estimatedW = 0;
+    footerItems.forEach((item, i) => {
+      const txt = item.value || '';
+      const itemW = item.type === 'symbol'
+        ? baseFooterFz * 1.4
+        : txt.length * baseFooterFz * 0.55;
+      estimatedW += itemW;
+      if (i < footerItems.length - 1) estimatedW += itemGap;
+    });
+
+    const footerScale = estimatedW > availableW ? availableW / estimatedW : 1;
+    const footerFz = Math.max(6, baseFooterFz * footerScale);
+    const gap = itemGap * footerScale;
+
+    let fx = padX;
+    footerItems.forEach(item => {
+      const txt = item.value || '';
+      const isSymbol = item.type === 'symbol';
+      const itemFz = isSymbol ? footerFz * 1.2 : footerFz;
+      s += `<text x="${fx}" y="${fy + footerH/2}" dominant-baseline="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="${itemFz}" fill="${card.footer.text_color}">${escapeHtml(txt)}</text>`;
+      fx += (isSymbol ? footerFz * 1.4 : txt.length * footerFz * 0.55) + gap;
+    });
+  }
 
   // Stiplet grid over alt
   for (let r = 1; r < card.rows; r++) {
