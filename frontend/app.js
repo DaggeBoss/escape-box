@@ -4962,6 +4962,47 @@ function onItemDragEnd(e) {
   itemDragState.draggedId = null;
 }
 
+/* ─── BLOCK-NIVÅ UPDATE HELPERS ──────────────────────── */
+function updateBlockField(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b[field] = value;
+  if (field === 'name') {
+    const t = $('#modal-title');
+    if (t) t.textContent = 'Block-editor: ' + (value || 'Uten navn');
+    renderBlockList();
+  }
+  refreshBlockPreview();
+}
+
+function updateBlockSize(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  const n = parseInt(value, 10);
+  if (isNaN(n) || n < 4) return;
+  b[field] = n;
+  refreshBlockPreview();
+}
+
+function updateBlockHeader(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b.header[field] = value;
+  refreshBlockPreview();
+  // Bare re-render hele editoren ved fargevalg (slik at palette-knappens
+  // selected-state oppdateres). Tekstinput skal IKKE trigge refresh —
+  // det ville miste cursor-fokus.
+  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
+}
+
+function updateBlockFooter(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b.footer[field] = value;
+  refreshBlockPreview();
+  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
+}
+
 
 function refreshBlockEditor() {
   const body = $('#modal-body');
