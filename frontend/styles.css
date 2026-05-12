@@ -1425,3 +1425,224 @@ table.data-table .col-actions { text-align: right; white-space: nowrap; }
   .board-builder { grid-template-columns: 1fr; height: auto; }
   .board-canvas-wrap { max-height: 500px; }
 }
+
+/* ════════════════════════════════════════════════════════
+   BLOCKS — informasjonspaneler i Investigation board
+   ──────────────────────────────────────────────────────── */
+
+/* Block-listen i sidekolonnen */
+#bb-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bb-block-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.bb-block-row:hover {
+  background: var(--bg2);
+  border-color: var(--rule2);
+}
+.bb-block-row.is-active {
+  background: var(--green-bg);
+  border-color: var(--green);
+  border-left-width: 3px;
+  padding-left: 6px;
+}
+.bb-block-name {
+  flex: 1;
+  font-family: var(--font-cond);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bb-block-meta {
+  font-family: var(--font-cond);
+  font-size: 10px;
+  color: var(--ink3);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.bb-block-del {
+  background: transparent;
+  border: none;
+  color: var(--red);
+  font-size: 12px;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s, background 0.12s;
+  border-radius: 2px;
+}
+.bb-block-del:hover {
+  opacity: 1;
+  background: var(--red-bg);
+}
+
+/* Trigger-panel inne i block-editor (over template-editoren) */
+.block-trigger-panel {
+  background: var(--bg2);
+  border: 1.5px solid var(--rule2);
+  border-radius: 3px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.block-trigger-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.block-trigger-title {
+  font-family: var(--font-cond);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.block-trigger-sub {
+  font-family: var(--font-cond);
+  font-size: 12px;
+  color: var(--ink3);
+  margin-top: 2px;
+}
+.block-trigger-hint {
+  background: var(--amber-bg);
+  border-left: 3px solid var(--amber);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--ink2);
+  line-height: 1.5;
+  margin-bottom: 10px;
+  border-radius: 0 3px 3px 0;
+}
+.block-name-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 10px 0;
+}
+
+/* Trigger-chips */
+.bt-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-family: var(--font-cond);
+  font-size: 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+.bt-chip-card { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+.bt-chip-coord { border-color: var(--green); background: var(--green-bg); color: var(--green); }
+.bt-chip-missing { border-color: var(--red); background: var(--red-bg); color: var(--red); font-style: italic; }
+.bt-chip-meta {
+  font-size: 10px;
+  color: var(--ink3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bt-chip-x {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 0 2px;
+  margin-left: 2px;
+}
+.bt-chip-x:hover { opacity: 1; }
+
+/* Pick-modus markering på board */
+.board-canvas-inner.is-pick-mode {
+  outline: 3px dashed var(--amber);
+  outline-offset: 2px;
+  position: relative;
+}
+.board-canvas-inner.is-pick-mode::before {
+  content: 'PICK-MODUS — klikk på kort eller koord-celler for å toggle trigger';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 10;
+  background: var(--amber);
+  color: #fff;
+  font-family: var(--font-cond);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Cells/kort markert som trigger på aktiv block */
+.board-cell-rect.is-trigger {
+  fill: rgba(42, 107, 60, 0.22) !important;
+  stroke: var(--green);
+  stroke-width: 2;
+}
+.board-physical-card.is-trigger > rect:first-of-type {
+  stroke: var(--green) !important;
+  stroke-width: 3 !important;
+}
+.board-physical-card.is-trigger::after {
+  /* (SVG støtter ikke ::after — vi viser via stroke-width over) */
+}
+
+/* Flytende pin-knapp når block-editor er minimert for board-plukking */
+.block-pick-pin {
+  position: fixed;
+  bottom: 18px;
+  left: 18px;
+  z-index: 2500;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 3px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+  font-family: var(--font-cond);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bp-pin-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: bp-pulse 1.2s ease-in-out infinite;
+}
+.bp-pin-text {
+  font-weight: 700;
+}
+@keyframes bp-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}

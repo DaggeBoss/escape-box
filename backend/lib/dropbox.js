@@ -283,7 +283,7 @@ function cleanFilename(name) {
 
 function buildScenarioImagePath(scenarioId, kind, originalFilename) {
   // kind: 'coords' | 'cards' | 'backgrounds'
-  const validKinds = ['coords', 'cards', 'backgrounds', 'originals'];
+  const validKinds = ['coords', 'cards', 'backgrounds', 'originals', 'blocks'];
   if (!validKinds.includes(kind)) {
     throw new Error(`Ugyldig bilde-kind: ${kind}. Må være en av ${validKinds.join(', ')}`);
   }
@@ -298,7 +298,7 @@ function buildScenarioImagePath(scenarioId, kind, originalFilename) {
   // bilder med samme navn ikke kolliderer.
   let filename;
   const safeName = (originalFilename || '').replace(/[\u0000-\u001f\\\/]/g, '').trim();
-  const looksDeterministic = /^(Grid|Bunke|export|thumb-Grid|thumb-Bunke|thumb-export)/i.test(safeName);
+  const looksDeterministic = /^(Grid|Bunke|Block|export|thumb-Grid|thumb-Bunke|thumb-Block|thumb-export)/i.test(safeName);
 
   if (safeName && looksDeterministic) {
     // Bruk filnavnet som-er — krevet for overwrite-flyten

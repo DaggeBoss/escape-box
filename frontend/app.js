@@ -451,6 +451,13 @@ function roleLabel(r) {
 /* ─── ROUTER ──────────────────────────────────────────── */
 async function goto(view) {
   state.currentView = view;
+  // Rydd block-pick-modus ved view-bytte (pin ikke gyldig utenfor scenario-editor)
+  if (typeof blockEditorState !== 'undefined') {
+    blockEditorState.pickMode = false;
+    blockEditorState.activeBlockId = null;
+    const pin = $('#block-pick-pin');
+    if (pin) pin.style.display = 'none';
+  }
   $$('#sidebar .nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
   });
@@ -543,6 +550,14 @@ function openModal({ title, body, footer, size, onSubmit }) {
 function closeModal() {
   $('#modal-overlay').classList.remove('open');
   _modalOnSubmit = null;
+  // Hvis pick-modus ikke er aktivt (eller block-editor er ikke åpen lenger),
+  // sørg for at pin er skjult.
+  if (typeof blockEditorState !== 'undefined') {
+    if (!blockEditorState.pickMode) {
+      const pin = $('#block-pick-pin');
+      if (pin) pin.style.display = 'none';
+    }
+  }
 }
 function closeModalOnBackdrop(e) {
   if (e.target.id === 'modal-overlay') closeModal();
@@ -1439,7 +1454,23 @@ function ensureScenarioShape(sc) {
   if (!sd.grid) sd.grid = { x: 20, y: 15, cell_size: 50, show_labels: true };
   if (!Array.isArray(sd.coordinates)) sd.coordinates = [];
   if (!Array.isArray(sd.physical_cards)) sd.physical_cards = [];
+  if (!Array.isArray(sd.blocks)) sd.blocks = [];
   if (!sd.settings) sd.settings = {};
+
+  // Sørg for at hver koordinat har en stabil id (blocks refererer via id)
+  sd.coordinates.forEach(c => {
+    if (!c.id) c.id = 'coord_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
+    // Fjern gamle reward-data — vi har gjort en rein start
+    if (c.rewards !== undefined) delete c.rewards;
+  });
+
+  // Migrer blocks (sett standard-felt på hvert)
+  sd.blocks.forEach(b => ensureBlockShape(b));
+}
+
+// Generer en kort, lesbar id med prefix
+function genBlockId() {
+  return 'block_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
 }
 
 function renderScenarioEditor() {
@@ -1597,6 +1628,19 @@ function renderScBoardTab() {
         <div class="board-config" id="board-anchors-panel">
           <h4>Ankere</h4>
           <div id="bb-anchor-list"></div>
+        </div>
+
+        <div class="board-config" id="board-blocks-panel">
+          <h4 style="display:flex;align-items:center;gap:6px;">
+            <span>Blocks</span>
+            <span class="muted" id="bb-block-count" style="font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;">(0)</span>
+            <span style="flex:1;"></span>
+            <button class="btn btn-sm btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="createBlock()">+ Ny</button>
+          </h4>
+          <div class="muted" style="font-size:11px;margin-bottom:6px;line-height:1.4;">
+            Informasjonspaneler som utløses av kort/koordinater. Klikk for å redigere.
+          </div>
+          <div id="bb-block-list"></div>
         </div>
 
         <div class="board-config" id="board-live-info" style="${boardState.liveInfo ? '' : 'display:none;'}">
@@ -1880,10 +1924,10 @@ function syncCoordsFromCards() {
     } else {
       // Opprett ny
       sd.coordinates.push({
+        id: 'coord_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now(),
         x, y,
         code: (card.header?.code || '').trim(),
         points: 10,
-        rewards: [],
         from_card: card.id,
       });
     }
@@ -1914,6 +1958,13 @@ function renderBoard() {
   scenarioBuf.scenario_data.coordinates.forEach((c, i) => {
     coordsByXY[`${c.x},${c.y}`] = i;
   });
+
+  // Bygg trigger-oppslag for aktiv block (vises som ring rundt celler/kort)
+  const activeBlock = (blockEditorState && blockEditorState.activeBlockId)
+    ? scenarioBuf.scenario_data.blocks.find(b => b.id === blockEditorState.activeBlockId)
+    : null;
+  const triggeredCoordIds = activeBlock ? new Set(activeBlock.triggered_by_coords || []) : new Set();
+  const triggeredCardIds = activeBlock ? new Set(activeBlock.triggered_by_cards || []) : new Set();
 
   // Bygg SVG. Hele grid-rendering forskyves med (M, M) slik at akse-overskriftene
   // kan plasseres i marginen rundt.
@@ -1958,9 +2009,12 @@ function renderBoard() {
   // Ruter (uten tall i hver — nå har vi akser i marginen)
   for (let y = 0; y < g.y; y++) {
     for (let x = 0; x < g.x; x++) {
-      const has = (`${x},${y}` in coordsByXY);
+      const idx = coordsByXY[`${x},${y}`];
+      const has = idx !== undefined;
       const sel = boardState.selectedCoord && boardState.selectedCoord.x === x && boardState.selectedCoord.y === y;
-      const cls = `board-cell-rect${has ? ' has-coord' : ''}${sel ? ' selected' : ''}`;
+      const coordId = has ? scenarioBuf.scenario_data.coordinates[idx]?.id : null;
+      const isTrigger = coordId && triggeredCoordIds.has(coordId);
+      const cls = `board-cell-rect${has ? ' has-coord' : ''}${sel ? ' selected' : ''}${isTrigger ? ' is-trigger' : ''}`;
       svg += `<rect class="${cls}" x="${x*cs}" y="${y*cs}" width="${cs}" height="${cs}" data-x="${x}" data-y="${y}" onclick="onCellClick(${x},${y})"/>`;
     }
   }
@@ -1977,8 +2031,9 @@ function renderBoard() {
 
     // Skjul kort-grafikk når toggle er på, men kortets <g>-wrapper må fortsatt finnes
     // (uten den kan man ikke dra det). Vi tegner bare en transparent ramme.
+    const trig = triggeredCardIds.has(card.id) ? ' is-trigger' : '';
     if (boardState.hideCards) {
-      svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
+      svg += `<g class="board-physical-card${sel ? ' selected' : ''}${trig}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
       svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="transparent" stroke="${sel ? 'var(--blue)' : 'rgba(0,0,0,0.1)'}" stroke-width="${sel ? 2 : 1}" stroke-dasharray="${sel ? '4 3' : '2 4'}" style="cursor:move;"/>`;
       if (sel) {
         svg += `<circle class="board-resize-handle" cx="${cx + cw}" cy="${cy + ch}" r="6" data-handle="se" onmousedown="onCardMouseDown(event, '${card.id}', 'resize-se')"/>`;
@@ -1995,7 +2050,7 @@ function renderBoard() {
       return;
     }
 
-    svg += `<g class="board-physical-card${sel ? ' selected' : ''}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
+    svg += `<g class="board-physical-card${sel ? ' selected' : ''}${trig}" data-card="${card.id}" onmousedown="onCardMouseDown(event, '${card.id}')">`;
 
     if (card.uploading) {
       svg += `<rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" fill="#eee" stroke="#bbb" stroke-dasharray="4 3"/>`;
@@ -2047,13 +2102,25 @@ function renderBoard() {
   svg += `</svg>`;
   wrap.innerHTML = svg;
 
+  // Marker board hvis vi er i pick-modus (CSS-overlay)
+  wrap.classList.toggle('is-pick-mode', !!(blockEditorState && blockEditorState.pickMode && blockEditorState.activeBlockId));
+
   // Re-applikere zoom-tilstand siden innerHTML-erstatning ikke bevarer transform
   applyBoardZoom();
 
   renderCardsList();
   renderMiniCoordList();
   renderAnchorList();
+  renderBlockList();
+  updateBlockCount();
   renderLiveInfo();
+}
+
+function updateBlockCount() {
+  const el = $('#bb-block-count');
+  if (!el) return;
+  const n = (scenarioBuf?.scenario_data?.blocks || []).length;
+  el.textContent = `(${n})`;
 }
 
 function renderAnchorList() {
@@ -2265,12 +2332,31 @@ function onCellClick(x, y) {
   // Hvis vi drar et kort, ignorer
   if (boardState.draggingCard) return;
 
-  // Sjekk om koordinat finnes
+  // Block-pick-modus: toggle trigger på koord ved (x,y).
+  // Hvis ingen koord finnes der ennå, opprett en først.
+  if (blockEditorState.pickMode && blockEditorState.activeBlockId) {
+    let coordId = coordIdAtCell(x, y);
+    if (!coordId) {
+      const list = scenarioBuf.scenario_data.coordinates;
+      const newCoord = {
+        id: 'coord_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now(),
+        x, y, code: '', points: 10,
+      };
+      list.push(newCoord);
+      coordId = newCoord.id;
+    }
+    toggleBlockTriggerForCoord(coordId);
+    return;
+  }
+
+  // Normal flyt — åpne koord for redigering
   const list = scenarioBuf.scenario_data.coordinates;
   let idx = list.findIndex(c => c.x === x && c.y === y);
   if (idx < 0) {
-    // Opprett ny
-    list.push({ x, y, code: '', points: 10, rewards: [] });
+    list.push({
+      id: 'coord_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now(),
+      x, y, code: '', points: 10,
+    });
     idx = list.length - 1;
   }
   editingCoordIdx = idx;
@@ -3961,6 +4047,13 @@ async function removeCard(id) {
 function onCardMouseDown(e, cardId, mode = 'move') {
   e.preventDefault();
   e.stopPropagation();
+
+  // Block-pick-modus: klikk på et kort = toggle trigger, ikke drag.
+  if (blockEditorState.pickMode && blockEditorState.activeBlockId && mode === 'move') {
+    toggleBlockTriggerForCard(cardId);
+    return;
+  }
+
   const card = scenarioBuf.scenario_data.physical_cards.find(c => c.id === cardId);
   if (!card) return;
   boardState.selectedCard = cardId;
@@ -4074,7 +4167,8 @@ function selectCoord(idx) {
 
 function addCoord() {
   scenarioBuf.scenario_data.coordinates.push({
-    x: 0, y: 0, code: '', points: 10, rewards: [],
+    id: 'coord_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now(),
+    x: 0, y: 0, code: '', points: 10,
   });
   editingCoordIdx = scenarioBuf.scenario_data.coordinates.length - 1;
   renderCoordList();
@@ -4141,17 +4235,10 @@ function renderCoordDetail() {
 
     <div class="divider"></div>
 
-    <div class="flex-between mb-1">
-      <h4 style="font-family:var(--font-cond);font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink2);">Belønninger</h4>
-      <div class="flex-gap">
-        <button class="btn btn-sm btn-secondary" onclick="addReward('question')">+ Spørsmål</button>
-        <button class="btn btn-sm btn-secondary" onclick="addReward('clue')">+ Spor</button>
-        <button class="btn btn-sm btn-secondary" onclick="addReward('poi')">+ Person</button>
-        <button class="btn btn-sm btn-secondary" onclick="addReward('unlock')">+ Lås</button>
-      </div>
+    <div class="muted" style="font-style:italic;padding:10px 0;font-size:13px;line-height:1.5;">
+      Belønninger er nå byttet ut med <strong>blocks</strong>. Du finner block-biblioteket i sidekolonnen på Investigation board.
+      En block utløses av kort og/eller koordinater du velger inne i selve blocken.
     </div>
-
-    <div id="reward-list">${renderRewards(c.rewards || [])}</div>
   `;
 }
 
@@ -4174,234 +4261,508 @@ function removeCoord(idx) {
   renderCoordDetail();
 }
 
-/* ─── BELØNNINGER MED INLINE FIELD TERMINAL-KORT ─── */
-function renderRewards(rewards) {
-  if (rewards.length === 0) {
-    return '<div class="muted" style="font-style:italic;padding:10px;text-align:center;">Ingen belønninger ennå. Bruk knappene over for å legge til.</div>';
+/* ════════════════════════════════════════════════════════
+   BLOCKS — informasjonspaneler som utløses av kort/koordinater
+   
+   En block er et frittstående visuelt panel (samme designverktøy
+   som template-kort) som dokumenterer spillflyten. Den har en
+   liste over hvilke kort og koordinater som utløser den.
+   
+   - bor i scenario_data.blocks[]
+   - åpnes for redigering i samme template-editor som kort
+   - eksporteres som PNG til /Escape Box/scenarios/{id}/blocks/
+   - vises i sidekolonne på Investigation board
+   ──────────────────────────────────────────────────────── */
+
+// Standardisert form for en block (kompatibel med template-editor)
+function ensureBlockShape(b) {
+  if (!b) return;
+  if (!b.id) b.id = genBlockId();
+  if (!b.name) b.name = 'Block';
+  if (!b.cols) b.cols = 5;
+  if (!b.rows) b.rows = 7;
+  if (!Array.isArray(b.triggered_by_cards)) b.triggered_by_cards = [];
+  if (!Array.isArray(b.triggered_by_coords)) b.triggered_by_coords = [];
+  if (!b.header) {
+    b.header = {
+      title: b.name || 'Block',
+      code: '',
+      bg_color: '#2a6b3c',
+      text_color: '#ffffff',
+      code_bg_color: '#c8961a',
+      code_text_color: '#1a1610',
+      rows: HEADER_DEFAULT_ROWS,
+    };
   }
-  return rewards.map((r, i) => renderRewardCard(r, i)).join('');
+  if (b.header.code_bg_color == null) b.header.code_bg_color = '#c8961a';
+  if (b.header.code_text_color == null) b.header.code_text_color = '#1a1610';
+
+  if (!b.footer) {
+    b.footer = {
+      items: [],
+      bg_color: '#ede8dc',
+      text_color: '#1a1610',
+      rows: FOOTER_DEFAULT_ROWS,
+    };
+  }
+  if (!b.content) {
+    b.content = {
+      layers: [],
+      bg_color: '#faf8f3',
+    };
+  }
+  if (!Array.isArray(b.overlays)) b.overlays = [];
+  // Marker som block-type slik at template-editor kan tilpasse seg
+  b.type = 'block';
 }
 
-function renderRewardCard(r, idx) {
-  return `
-    <div class="reward-item r-${r.type}" data-idx="${idx}">
-      <div class="reward-item-header">
-        <div class="fc-type-switcher" style="flex:1;max-width:380px;">
-          <button class="fc-type-btn ${r.type === 'clue' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'clue')">Spor</button>
-          <button class="fc-type-btn ${r.type === 'poi' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'poi')">Person</button>
-          <button class="fc-type-btn ${r.type === 'unlock' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'unlock')">Lås</button>
-          <button class="fc-type-btn ${r.type === 'question' ? 'active' : ''}" onclick="changeRewardType(${idx}, 'question')">Spørsmål</button>
-        </div>
-        <button class="btn btn-sm btn-ghost" onclick="removeReward(${idx})" style="margin-left:auto;">✕ Fjern</button>
-      </div>
-      ${renderRewardCardBody(r, idx)}
-    </div>
-  `;
+function createBlock() {
+  const b = {
+    id: genBlockId(),
+    name: 'Ny block',
+    type: 'block',
+    cols: 5,
+    rows: 7,
+    triggered_by_cards: [],
+    triggered_by_coords: [],
+  };
+  ensureBlockShape(b);
+  scenarioBuf.scenario_data.blocks.push(b);
+  renderBlockList();
+  openBlockEditor(b.id);
 }
 
-function renderRewardCardBody(r, idx) {
-  if (r.type === 'clue') return renderClueCardEditable(r, idx);
-  if (r.type === 'poi')  return renderPoiCardEditable(r, idx);
-  if (r.type === 'unlock') return renderUnlockCardEditable(r, idx);
-  if (r.type === 'question') return renderQuestionCardEditable(r, idx);
-  return '<div class="muted">Ukjent type</div>';
+function renderBlockList() {
+  const el = $('#bb-block-list');
+  if (!el) return;
+  const blocks = scenarioBuf.scenario_data.blocks || [];
+  if (blocks.length === 0) {
+    el.innerHTML = '<div class="muted" style="font-style:italic;font-size:11px;padding:6px;">Ingen blocks ennå. Klikk «+ Ny» for å lage en.</div>';
+    return;
+  }
+  el.innerHTML = blocks.map((b, i) => {
+    const cards = b.triggered_by_cards || [];
+    const coords = b.triggered_by_coords || [];
+    const triggerCount = cards.length + coords.length;
+    const isActive = blockEditorState.activeBlockId === b.id;
+    return `
+      <div class="bb-block-row ${isActive ? 'is-active' : ''}" onclick="openBlockEditor('${b.id}')">
+        <div class="bb-block-name">${escapeHtml(b.name || 'Uten navn')}</div>
+        <div class="bb-block-meta">${triggerCount} trigger${triggerCount === 1 ? '' : 'e'}</div>
+        <button class="bb-block-del" title="Slett block" onclick="event.stopPropagation();deleteBlock('${b.id}')">✕</button>
+      </div>
+    `;
+  }).join('');
 }
 
-function renderClueCardEditable(r, idx) {
-  return `
-    <div class="fc-clue-card">
-      <div class="fc-card-header">
-        <span class="fc-card-icon">🔎</span>
-        <span class="fc-card-title">
-          <span contenteditable="true" class="editable" data-empty="${!r.title}" data-placeholder="Intelligence Clue"
-                oninput="updateRewardEditable(${idx}, 'title', this.textContent)">${escapeHtml(r.title || '')}</span>
-        </span>
-        <span class="fc-card-tag">Clue</span>
-      </div>
-      <div class="fc-card-body">
-        <div class="fc-clue-text">
-          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Skriv spor-teksten her — det viktigste deltagerne skal oppdage"
-                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
-        </div>
-        <div class="fc-clue-note">
-          <span contenteditable="true" class="editable" data-empty="${!r.note}" data-placeholder="Valgfri notat (kontekst, hint, kobling)"
-                oninput="updateRewardEditable(${idx}, 'note', this.textContent)">${escapeHtml(r.note || '')}</span>
-        </div>
-      </div>
-    </div>
-  `;
+function deleteBlock(blockId) {
+  const blocks = scenarioBuf.scenario_data.blocks || [];
+  const idx = blocks.findIndex(b => b.id === blockId);
+  if (idx < 0) return;
+  const block = blocks[idx];
+  if (!confirm(`Slette blocken «${block.name}»? Dette kan ikke angres.`)) return;
+
+  // Rydd PNG-er fra Dropbox i bakgrunnen (ikke-blokkerende)
+  if (block.export_path?.startsWith('/Escape Box/')) {
+    deleteImage(block.export_path, block.export_url).catch(e => console.warn('Slett-feil block PNG:', e.message));
+  }
+  if (block.export_thumb_path?.startsWith('/Escape Box/')) {
+    deleteImage(block.export_thumb_path, block.export_thumb_url).catch(e => console.warn('Slett-feil block thumb:', e.message));
+  }
+
+  blocks.splice(idx, 1);
+  if (blockEditorState.activeBlockId === blockId) {
+    blockEditorState.activeBlockId = null;
+    blockEditorState.pickMode = false;
+    hideTriggerPickPin();
+  }
+  renderBlockList();
+  renderBoard();
 }
 
-function renderPoiCardEditable(r, idx) {
-  const initials = (r.name || '?').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 3) || '?';
-  return `
-    <div class="fc-poi-card">
-      <div class="fc-card-header">
-        <span class="fc-card-icon">🚨</span>
-        <span class="fc-card-title">Person of Interest</span>
-        <span class="fc-card-tag">Flagged</span>
-      </div>
-      <div class="fc-card-body">
-        <div class="fc-poi-name-block">
-          <div class="fc-poi-icon-circle">${escapeHtml(initials)}</div>
-          <div style="flex:1;">
-            <div class="fc-poi-name">
-              <span contenteditable="true" class="editable" data-empty="${!r.name}" data-placeholder="Navn på person"
-                    oninput="updateRewardEditable(${idx}, 'name', this.textContent);refreshPoiInitials(${idx})">${escapeHtml(r.name || '')}</span>
-            </div>
-            <div class="fc-poi-subtitle">
-              <span contenteditable="true" class="editable" data-empty="${!r.subtitle}" data-placeholder="Tittel/rolle (f.eks. «Under investigation»)"
-                    oninput="updateRewardEditable(${idx}, 'subtitle', this.textContent)">${escapeHtml(r.subtitle || '')}</span>
-            </div>
-          </div>
-        </div>
-        <div class="fc-poi-note">
-          <span contenteditable="true" class="editable" data-empty="${!r.note}" data-placeholder="Valgfri notat — bakgrunn eller hva deltagerne bør merke seg"
-                oninput="updateRewardEditable(${idx}, 'note', this.textContent)">${escapeHtml(r.note || '')}</span>
-        </div>
-      </div>
-    </div>
-  `;
+/* ─── BLOCK EDITOR STATE ─────────────────────────────────
+   Når en block er åpen for redigering vises trigger-info inne i
+   editoren. Pick-mode aktiveres med en knapp inne i editoren og
+   gjør at klikk på board-celler eller kort toggler triggere på
+   den aktive blocken.
+   ──────────────────────────────────────────────────────── */
+let blockEditorState = {
+  activeBlockId: null,   // hvilken block som er åpen
+  pickMode: false,       // er trigger-pick-modus aktivert?
+};
+
+function openBlockEditor(blockId) {
+  const block = scenarioBuf.scenario_data.blocks.find(b => b.id === blockId);
+  if (!block) return;
+  ensureBlockShape(block);
+  blockEditorState.activeBlockId = blockId;
+  blockEditorState.pickMode = false;
+
+  // Sett opp template-editor til å redigere denne blocken
+  templateBuf = block;
+  templateTool = 'select';
+  templateSelectedZone = null;
+  templateSelectedLayer = -1;
+  templateSelectedFooterItem = -1;
+
+  openModal({
+    title: 'Block-editor: ' + (block.name || 'Uten navn'),
+    size: 'xl',
+    body: renderBlockEditorBody(),
+    footer: `
+      <button class="btn btn-secondary" onclick="closeBlockEditor()">⤺ Tilbake</button>
+      <button class="btn btn-success" onclick="saveBlockOnly()">⤳ Lagre block</button>
+    `,
+  });
 }
 
-function refreshPoiInitials(idx) {
-  // Re-render bare initialene uten å miste fokus i editable
-  const r = scenarioBuf.scenario_data.coordinates[editingCoordIdx]?.rewards?.[idx];
-  if (!r) return;
-  const wrapper = $(`.reward-item[data-idx="${idx}"] .fc-poi-icon-circle`);
-  if (wrapper) {
-    const initials = (r.name || '?').split(/\s+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 3) || '?';
-    wrapper.textContent = initials;
+function closeBlockEditor() {
+  templateBuf = null;
+  templateSelectedZone = null;
+  templateSelectedLayer = -1;
+  templateDrag = null;
+  // Avslutt også pick-modus hvis aktiv (lukker pin-en)
+  blockEditorState.pickMode = false;
+  blockEditorState.activeBlockId = null;
+  hideTriggerPickPin();
+  closeModal();
+  if (state.currentScenarioId) {
+    activeScTab = 'board';
+    openScenarioEditor(state.currentScenarioId);
   }
 }
 
-function renderUnlockCardEditable(r, idx) {
+/* Editor-body = standard template-editor + trigger-panel på toppen */
+function renderBlockEditorBody() {
+  const block = templateBuf;
+  if (!block) return '';
   return `
-    <div class="fc-unlock-card">
-      <div class="fc-card-header">
-        <span class="fc-card-icon">🔓</span>
-        <span class="fc-card-title">
-          <span contenteditable="true" class="editable" data-empty="${!r.title}" data-placeholder="Tittel — f.eks. «Hengelås på safe»"
-                oninput="updateRewardEditable(${idx}, 'title', this.textContent)">${escapeHtml(r.title || '')}</span>
-        </span>
-        <span class="fc-card-tag">Unlock</span>
-      </div>
-      <div class="fc-card-body">
-        <div class="fc-unlock-text">
-          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Instruksjon — hva deltagerne skal gjøre fysisk"
-                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
+    <div class="block-trigger-panel">
+      <div class="block-trigger-header">
+        <div>
+          <div class="block-trigger-title">Triggers</div>
+          <div class="block-trigger-sub">Hvilke kort og koordinater skal utløse denne blocken?</div>
         </div>
-        <div class="fc-unlock-bonus">
-          Bonus ved bekreftelse:
-          <input type="number" min="0" class="fc-q-footer-input" value="${r.bonus ?? 5}"
-                 oninput="updateReward(${idx}, 'bonus', Number(this.value))"> p
-        </div>
+        <button class="btn btn-sm btn-amber" onclick="startTriggerPick()">
+          + Velg triggere på board
+        </button>
       </div>
+      <div id="block-trigger-summary">${renderBlockTriggerSummary(block)}</div>
     </div>
+    <div class="block-name-bar">
+      <label class="field-label" style="display:inline-block;margin-right:8px;">Block-navn</label>
+      <input type="text" value="${escapeHtml(block.name || '')}" oninput="updateBlockName(this.value)" style="max-width:380px;display:inline-block;">
+    </div>
+    <div class="divider"></div>
+    ${renderTemplateEditor()}
   `;
 }
 
-function renderQuestionCardEditable(r, idx) {
-  if (!Array.isArray(r.options)) r.options = ['', '', '', ''];
-  while (r.options.length < 4) r.options.push('');
-  const correct = r.correct ?? 0;
+function updateBlockName(name) {
+  if (!templateBuf) return;
+  templateBuf.name = name;
+  // Live-oppdater modal-tittel
+  const t = $('#modal-title');
+  if (t) t.textContent = 'Block-editor: ' + (name || 'Uten navn');
+  // Live-oppdater block-listen i sidekolonnen (selv om den er skjult bak modal)
+  renderBlockList();
+}
 
-  return `
-    <div class="fc-question-card">
-      <div class="fc-card-header">
-        <span class="fc-card-icon">?</span>
-        <span class="fc-card-title">Spørsmål</span>
-        <span class="fc-card-tag">Quiz</span>
-      </div>
-      <div class="fc-card-body">
-        <div class="fc-question-text">
-          <span contenteditable="true" class="editable" data-empty="${!r.text}" data-placeholder="Skriv spørsmålet her"
-                oninput="updateRewardEditable(${idx}, 'text', this.textContent)">${escapeHtml(r.text || '')}</span>
-        </div>
-        <div class="fc-q-options">
-          ${[0,1,2,3].map(j => `
-            <label class="fc-q-option ${correct === j ? 'correct' : ''}">
-              <input type="radio" name="q-correct-${idx}" ${correct === j ? 'checked' : ''} onchange="updateReward(${idx}, 'correct', ${j});renderCoordDetail();" style="display:none;">
-              <span class="fc-q-letter" onclick="this.parentElement.querySelector('input').click()">${'ABCD'[j]}</span>
-              <input type="text" class="fc-q-input" value="${escapeHtml(r.options[j] || '')}"
-                     placeholder="Svaralternativ ${'ABCD'[j]}"
-                     oninput="updateRewardOption(${idx}, ${j}, this.value)">
-              <button type="button" class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:10px;${correct === j ? 'opacity:0.4;' : ''}"
-                      onclick="updateReward(${idx}, 'correct', ${j});renderCoordDetail();">${correct === j ? '✓ Riktig' : 'Sett riktig'}</button>
-            </label>
-          `).join('')}
-        </div>
-        <div class="fc-q-footer">
-          <span>Poeng:</span>
-          <input type="number" min="0" class="fc-q-footer-input" value="${r.points ?? 5}"
-                 oninput="updateReward(${idx}, 'points', Number(this.value))">
-        </div>
-      </div>
+/* Start trigger-pick-modus:
+   1. Lagre blokken først (slik at endringer i navn/innhold ikke forsvinner
+      når vi laster scenariet på nytt for å bytte til board-fanen)
+   2. Sett pickMode=true, men HOLD activeBlockId
+   3. Lukk modal og åpne scenario-editor på board-fanen
+   4. Vis en flytende kontroll-pin som lar brukeren avslutte pick-modus
+      eller åpne blocken igjen.
+*/
+async function startTriggerPick() {
+  if (!blockEditorState.activeBlockId) return;
+  if (!state.currentScenarioId) return;
+
+  try {
+    // Lagre block først (PNG + scenario_data) slik at endringer ikke mistes
+    if (templateBuf) {
+      showToast('Lagrer block...', 'info', 1500);
+      try { await exportBlockPng(templateBuf); } catch (e) { console.warn('Block PNG-eksport feilet:', e.message); }
+      await api(`/api/scenarios/${state.currentScenarioId}`, {
+        method: 'PATCH',
+        body: { scenario_data: scenarioBuf.scenario_data },
+      });
+    }
+  } catch (e) {
+    showToast('Kunne ikke lagre block før pick-modus: ' + e.message, 'error');
+    return;
+  }
+
+  // pickMode aktiveres FØR vi lukker editor, slik at onclick-handlers vet
+  // at vi er i pick-modus så snart modal er borte.
+  blockEditorState.pickMode = true;
+
+  // Lukk modal og åpne scenario-editor på board-fanen
+  templateBuf = null;
+  templateSelectedZone = null;
+  templateSelectedLayer = -1;
+  templateDrag = null;
+  closeModal();
+
+  // openScenarioEditor laster scenariet på nytt. Det er OK fordi vi nettopp
+  // har lagret. Men den setter activeScTab='meta' — vi setter til 'board'
+  // i en wrapper.
+  await openScenarioEditor(state.currentScenarioId);
+  activeScTab = 'board';
+  // Tving tab-bytte etter at editor er åpen
+  setTimeout(() => {
+    if (typeof switchScTab === 'function') switchScTab('board');
+    showTriggerPickPin();
+  }, 50);
+}
+
+/* Avslutt pick-modus uten å åpne block-editor igjen */
+function endTriggerPick() {
+  blockEditorState.pickMode = false;
+  hideTriggerPickPin();
+  renderBoard();
+}
+
+/* Åpne block-editor igjen (avslutter også pick-modus implisitt
+   siden openBlockEditor setter pickMode=false). */
+function reopenActiveBlockEditor() {
+  const id = blockEditorState.activeBlockId;
+  if (!id) {
+    hideTriggerPickPin();
+    return;
+  }
+  hideTriggerPickPin();
+  openBlockEditor(id);
+}
+
+function showTriggerPickPin() {
+  let pin = $('#block-pick-pin');
+  if (!pin) {
+    pin = document.createElement('div');
+    pin.id = 'block-pick-pin';
+    pin.className = 'block-pick-pin';
+    document.body.appendChild(pin);
+  }
+  const block = currentEditingBlock();
+  const blockName = block ? (block.name || 'Block') : 'Block';
+  const count = block ? (block.triggered_by_cards.length + block.triggered_by_coords.length) : 0;
+  pin.innerHTML = `
+    <span class="bp-pin-dot"></span>
+    <div style="display:flex;flex-direction:column;line-height:1.2;">
+      <span class="bp-pin-text">Velger triggere for «${escapeHtml(blockName)}»</span>
+      <span style="font-size:10px;opacity:0.7;text-transform:none;letter-spacing:0;">Klikk på kort eller koord-celler. ${count} valgt.</span>
     </div>
+    <button class="btn btn-sm btn-secondary" onclick="reopenActiveBlockEditor()">↩ Tilbake til editor</button>
+    <button class="btn btn-sm" onclick="endTriggerPick()">✓ Ferdig</button>
   `;
+  pin.style.display = '';
 }
 
-function changeRewardType(idx, newType) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c) return;
-  const old = c.rewards[idx];
-  // Behold tekstfelt der det gir mening
-  const preserved = { text: old.text, note: old.note };
-  const defaults = {
-    question: { type: 'question', text: preserved.text || '', options: ['', '', '', ''], correct: 0, points: 5 },
-    clue: { type: 'clue', title: '', text: preserved.text || '', note: preserved.note || '' },
-    poi: { type: 'poi', name: '', subtitle: '', note: preserved.note || '' },
-    unlock: { type: 'unlock', title: '', text: preserved.text || '', bonus: 5 },
-  };
-  c.rewards[idx] = defaults[newType];
-  renderCoordDetail();
+function hideTriggerPickPin() {
+  const pin = $('#block-pick-pin');
+  if (pin) pin.style.display = 'none';
 }
 
-function addReward(type) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c) return;
-  if (!Array.isArray(c.rewards)) c.rewards = [];
-  const defaults = {
-    question: { type: 'question', text: '', options: ['', '', '', ''], correct: 0, points: 5 },
-    clue: { type: 'clue', title: '', text: '', note: '' },
-    poi: { type: 'poi', name: '', subtitle: '', note: '' },
-    unlock: { type: 'unlock', title: '', text: '', bonus: 5 },
-  };
-  c.rewards.push(defaults[type]);
-  renderCoordDetail();
-  renderCoordList();
+/* Live-rendret oversikt over triggers på en block.
+   Slår opp navn/koordinat-info fra scenarioBuf slik at endringer i
+   kort-navn eller koord-X,Y automatisk reflekteres her ved neste render.
+*/
+function renderBlockTriggerSummary(block) {
+  if (!block) return '';
+  const cards = scenarioBuf.scenario_data.physical_cards || [];
+  const coords = scenarioBuf.scenario_data.coordinates || [];
+
+  const cardItems = (block.triggered_by_cards || []).map(cardId => {
+    const card = cards.find(c => c.id === cardId);
+    if (!card) {
+      return `<span class="bt-chip bt-chip-missing">
+                ⃞ Mangler kort (${escapeHtml(cardId)})
+                <button class="bt-chip-x" onclick="removeBlockTriggerCard('${cardId}')">✕</button>
+              </span>`;
+    }
+    const where = card.in_stash ? 'bunke' : `grid (${card.grid_x},${card.grid_y})`;
+    return `<span class="bt-chip bt-chip-card">
+              ⃞ ${escapeHtml(card.name || 'Uten navn')}
+              <span class="bt-chip-meta">${where}${card.header?.code ? ' · ' + escapeHtml(card.header.code) : ''}</span>
+              <button class="bt-chip-x" onclick="removeBlockTriggerCard('${cardId}')" title="Fjern trigger">✕</button>
+            </span>`;
+  });
+
+  const coordItems = (block.triggered_by_coords || []).map(coordId => {
+    const coord = coords.find(c => c.id === coordId);
+    if (!coord) {
+      return `<span class="bt-chip bt-chip-missing">
+                ⊕ Mangler koord (${escapeHtml(coordId)})
+                <button class="bt-chip-x" onclick="removeBlockTriggerCoord('${coordId}')">✕</button>
+              </span>`;
+    }
+    return `<span class="bt-chip bt-chip-coord">
+              ⊕ (${coord.x},${coord.y})
+              <span class="bt-chip-meta">${coord.code ? escapeHtml(coord.code) : '(ingen kode)'}</span>
+              <button class="bt-chip-x" onclick="removeBlockTriggerCoord('${coordId}')" title="Fjern trigger">✕</button>
+            </span>`;
+  });
+
+  const all = [...cardItems, ...coordItems];
+  if (all.length === 0) {
+    return '<div class="muted" style="font-style:italic;padding:6px 0;font-size:12px;">Ingen triggere ennå. Aktiver «Velg triggere» og klikk på kort eller koord-celler i boardet.</div>';
+  }
+  return `<div class="bt-chip-list">${all.join('')}</div>`;
 }
 
-function updateReward(idx, field, value) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c || !c.rewards[idx]) return;
-  c.rewards[idx][field] = value;
+function removeBlockTriggerCard(cardId) {
+  const block = currentEditingBlock();
+  if (!block) return;
+  block.triggered_by_cards = (block.triggered_by_cards || []).filter(id => id !== cardId);
+  refreshBlockTriggerSummary();
+  renderBoard();
+  renderBlockList();
 }
 
-// Spesiell variant for editable spans (tekst kommer fra textContent og kan være tom)
-function updateRewardEditable(idx, field, value) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c || !c.rewards[idx]) return;
-  c.rewards[idx][field] = value;
-  // Oppdater data-empty attribute for placeholder-visning
-  const el = event && event.target;
-  if (el) el.setAttribute('data-empty', value ? 'false' : 'true');
+function removeBlockTriggerCoord(coordId) {
+  const block = currentEditingBlock();
+  if (!block) return;
+  block.triggered_by_coords = (block.triggered_by_coords || []).filter(id => id !== coordId);
+  refreshBlockTriggerSummary();
+  renderBoard();
+  renderBlockList();
 }
 
-function updateRewardOption(idx, optIdx, value) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c || !c.rewards[idx]) return;
-  if (!Array.isArray(c.rewards[idx].options)) c.rewards[idx].options = ['', '', '', ''];
-  c.rewards[idx].options[optIdx] = value;
+function currentEditingBlock() {
+  const id = blockEditorState.activeBlockId;
+  if (!id) return null;
+  return scenarioBuf.scenario_data.blocks.find(b => b.id === id);
 }
 
-function removeReward(idx) {
-  const c = scenarioBuf.scenario_data.coordinates[editingCoordIdx];
-  if (!c) return;
-  if (!confirm('Fjerne denne belønningen?')) return;
-  c.rewards.splice(idx, 1);
-  renderCoordDetail();
-  renderCoordList();
+function refreshBlockTriggerSummary() {
+  const block = currentEditingBlock();
+  const el = $('#block-trigger-summary');
+  if (el && block) el.innerHTML = renderBlockTriggerSummary(block);
+}
+
+/* Toggle trigger fra utenfor block-editoren (kalles fra board click) */
+function toggleBlockTriggerForCard(cardId) {
+  const block = currentEditingBlock();
+  if (!block || !blockEditorState.pickMode) return false;
+  block.triggered_by_cards = block.triggered_by_cards || [];
+  const idx = block.triggered_by_cards.indexOf(cardId);
+  if (idx >= 0) block.triggered_by_cards.splice(idx, 1);
+  else block.triggered_by_cards.push(cardId);
+  refreshBlockTriggerSummary();
+  renderBoard();
+  renderBlockList();
+  // Oppdater pin-counter hvis den er synlig
+  if ($('#block-pick-pin')?.style.display !== 'none') showTriggerPickPin();
+  return true;
+}
+
+function toggleBlockTriggerForCoord(coordId) {
+  const block = currentEditingBlock();
+  if (!block || !blockEditorState.pickMode) return false;
+  block.triggered_by_coords = block.triggered_by_coords || [];
+  const idx = block.triggered_by_coords.indexOf(coordId);
+  if (idx >= 0) block.triggered_by_coords.splice(idx, 1);
+  else block.triggered_by_coords.push(coordId);
+  refreshBlockTriggerSummary();
+  renderBoard();
+  renderBlockList();
+  // Oppdater pin-counter hvis den er synlig
+  if ($('#block-pick-pin')?.style.display !== 'none') showTriggerPickPin();
+  return true;
+}
+
+/* Sjekk om en gitt celle (x,y) har en koord — returner coord-id eller null */
+function coordIdAtCell(x, y) {
+  const coords = scenarioBuf.scenario_data.coordinates || [];
+  const c = coords.find(c => c.x === x && c.y === y);
+  return c ? c.id : null;
+}
+
+/* ─── BLOCK LAGRING ──────────────────────────────────── */
+async function saveBlockOnly() {
+  if (!state.currentScenarioId) {
+    showToast('Ingen scenario åpen', 'error');
+    return;
+  }
+  if (!templateBuf) return;
+  try {
+    showToast('Lagrer block og genererer PNG...', 'info');
+    await exportBlockPng(templateBuf);
+    await api(`/api/scenarios/${state.currentScenarioId}`, {
+      method: 'PATCH',
+      body: { scenario_data: scenarioBuf.scenario_data },
+    });
+    showToast('Block lagret', 'success');
+    closeBlockEditor();
+  } catch (e) {
+    showToast('Lagring feilet: ' + e.message, 'error');
+  }
+}
+
+/* PNG-eksport av en block — samme mønster som exportCardPng,
+   men med kind='blocks' og eget filnavn-prefix.
+*/
+async function exportBlockPng(block) {
+  if (!block || !state.currentScenarioId) return null;
+  try {
+    const W = (block.cols || 5) * CARD_EXPORT_PX_PER_CELL;
+    const H = (block.rows || 7) * CARD_EXPORT_PX_PER_CELL;
+    const tW = (block.cols || 5) * CARD_THUMB_PX_PER_CELL;
+    const tH = (block.rows || 7) * CARD_THUMB_PX_PER_CELL;
+    const svg = renderTemplateCardForExport(block);
+    const [fullBlob, thumbBlob] = await Promise.all([
+      svgToPngBlob(svg, W, H, '#ffffff'),
+      svgToPngBlob(svg, tW, tH, '#ffffff'),
+    ]);
+    const safeName = sanitizeFilename(block.name || 'uten-navn');
+    const filename = `Block-${safeName}.png`;
+    const thumbFilename = `thumb-${filename}`;
+
+    const oldPath = block.export_path;
+    const oldThumbPath = block.export_thumb_path;
+    const oldFilename = oldPath ? oldPath.split('/').pop() : null;
+    const filenameChanged = oldFilename && oldFilename !== filename;
+
+    const [fullResult, thumbResult] = await Promise.all([
+      uploadPngBlob(fullBlob, {
+        scenario_id: state.currentScenarioId,
+        kind: 'blocks',
+        filename,
+        overwrite: true,
+      }),
+      uploadPngBlob(thumbBlob, {
+        scenario_id: state.currentScenarioId,
+        kind: 'blocks',
+        filename: thumbFilename,
+        overwrite: true,
+      }),
+    ]);
+
+    if (fullResult?.url) {
+      block.export_url = fullResult.url;
+      block.export_path = fullResult.path;
+    }
+    if (thumbResult?.url) {
+      block.export_thumb_url = thumbResult.url;
+      block.export_thumb_path = thumbResult.path;
+    }
+
+    if (filenameChanged) {
+      if (oldPath?.startsWith('/Escape Box/')) {
+        deleteImage(oldPath).catch(e => console.warn('Slett-feil full block:', e.message));
+      }
+      if (oldThumbPath?.startsWith('/Escape Box/')) {
+        deleteImage(oldThumbPath).catch(e => console.warn('Slett-feil thumb block:', e.message));
+      }
+    }
+
+    return fullResult;
+  } catch (e) {
+    console.warn('Block-eksport feilet:', e.message);
+    return null;
+  }
 }
 
 /* ─── LAGRING ─── */
@@ -4428,9 +4789,25 @@ async function saveScenario() {
 
   try {
     // 1. Eksporter board som PNG og last opp til Dropbox.
-    //    Vi tar dette f\u00f8rst slik at board_export_url er med n\u00e5r vi PATCHer.
+    //    Vi tar dette først slik at board_export_url er med når vi PATCHer.
     showToast('Lagrer scenario og genererer board-PNG...', 'info', 2000);
     await exportBoardPng();
+
+    // 1b. Eksporter alle blocks som PNG.
+    //     Vi gjør dette sekvensielt for å unngå å overlaste Dropbox-API-et,
+    //     men feil på én block stopper ikke resten.
+    const blocks = scenarioBuf.scenario_data.blocks || [];
+    if (blocks.length > 0) {
+      showToast(`Genererer PNG for ${blocks.length} block${blocks.length === 1 ? '' : 's'}...`, 'info', 2000);
+      for (const b of blocks) {
+        try {
+          ensureBlockShape(b);
+          await exportBlockPng(b);
+        } catch (e) {
+          console.warn('Block-eksport feilet:', b.name, e.message);
+        }
+      }
+    }
 
     // 2. Lagre scenario_data
     await api(`/api/scenarios/${state.currentScenarioId}`, {

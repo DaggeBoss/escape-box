@@ -29,7 +29,7 @@ const upload = multer({
   },
 });
 
-const VALID_KINDS = ['coords', 'cards', 'backgrounds', 'originals'];
+const VALID_KINDS = ['coords', 'cards', 'backgrounds', 'originals', 'blocks'];
 
 // ─── POST /api/uploads/image ───────────────────────────────
 // multipart/form-data:
