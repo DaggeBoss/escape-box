@@ -1464,13 +1464,14 @@ function ensureScenarioShape(sc) {
     if (c.rewards !== undefined) delete c.rewards;
   });
 
-  // Slett gamle blocks (laget med forrige template-editor-iterasjon).
-  // Kjennetegn: mangler content_type, eller har content.layers (free-form
-  // bildelag fra template-editor). De nye blockene er strukturerte med
-  // content_type og content som type-spesifikt objekt.
+  // Slett gamle blocks. To gamle formater finnes:
+  // 1) template-editor-format: har content.layers eller mangler content_type
+  // 2) første iter av strukturerte blocks: har content_type + content (men ikke items)
+  // Nytt format: har items-array.
+  // Begge gamle formater slettes ved første lasting.
   sd.blocks = sd.blocks.filter(b => {
-    const isOldBlock = !b.content_type || (b.content && Array.isArray(b.content.layers));
-    if (isOldBlock) {
+    const hasItems = Array.isArray(b.items);
+    if (!hasItems) {
       console.warn('[Blocks] Slettet gammel block:', b.name || b.id);
       return false;
     }
@@ -4289,8 +4290,8 @@ function removeCoord(idx) {
    scenario-lagring.
    ──────────────────────────────────────────────────────── */
 
-// Default content for hver type. Brukes ved opprettelse og typebytte.
-const BLOCK_TYPES = {
+// Item-typer en block kan inneholde. Brukes for dropdown og lookup.
+const BLOCK_ITEM_TYPES = {
   mc:          { label: 'Multiple choice',  icon: '◉' },
   text:        { label: 'Text input',       icon: '✎' },
   order:       { label: 'Ordering',         icon: '⇅' },
@@ -4299,26 +4300,69 @@ const BLOCK_TYPES = {
   place_clues: { label: 'Place clues',      icon: '⊞' },
 };
 
-function defaultBlockContent(type) {
+// Bevart bakover-kompatibilitet: noen funksjoner ute i koden kan referere
+// til BLOCK_TYPES. Vi peker den på samme objekt.
+const BLOCK_TYPES = BLOCK_ITEM_TYPES;
+
+function genItemId() {
+  return 'item_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
+}
+
+function defaultItem(type) {
+  const base = { id: genItemId(), type };
   switch (type) {
     case 'mc':
-      return { question: '', count: 4, options: ['', '', '', ''], correct_index: 0 };
+      return { ...base, question: '', count: 4, options: ['', '', '', ''], correct_index: 0 };
     case 'text':
-      return { question: '', correct_answer: '' };
+      return { ...base, question: '', correct_answer: '' };
     case 'order':
-      return { instruction: '', count: 4, options: ['', '', '', ''] };
+      return { ...base, instruction: '', count: 4, options: ['', '', '', ''] };
     case 'unlock':
-      return { text: '', correct_answer: '' };
+      return { ...base, text: '', correct_answer: '' };
     case 'new_clues':
-      return { text: '', correct_answer: '' };
+      return { ...base, text: '', correct_answer: '' };
     case 'place_clues':
-      return { text: '', correct_answer: '' };
+      return { ...base, text: '', correct_answer: '' };
     default:
-      return { text: '' };
+      return { ...base, type: 'mc', question: '', count: 4, options: ['', '', '', ''], correct_index: 0 };
   }
 }
 
-// Standardisert form for en block
+// Hvor mye relativ plass hver type trenger i PNG-content-området.
+// Brukes for å auto-foreslå rows og fordele content-høyde i PNG.
+function itemWeight(type) {
+  switch (type) {
+    case 'mc':         return 2.4;  // spørsmål + 2-4 svaralternativer
+    case 'order':      return 2.4;  // instruks + 2-4 alternativer
+    case 'text':       return 1.4;  // spørsmål + svar-linje
+    case 'unlock':     return 1.2;  // fritekst
+    case 'new_clues':  return 1.2;
+    case 'place_clues':return 1.2;
+    default:           return 1.4;
+  }
+}
+
+// Beregn minimum antall rader basert på items
+function computeMinRows(items) {
+  // Header (1) + footer (1) + content. Hver weight-enhet = 1 rad.
+  const headerRows = 1;
+  const footerRows = 1;
+  const totalWeight = items.reduce((sum, it) => sum + itemWeight(it.type), 0);
+  // Minimum 1 weight-enhet for content selv om tom
+  const contentRows = Math.max(5, Math.ceil(totalWeight * 1.4));
+  return headerRows + footerRows + contentRows;
+}
+
+// Auto-juster b.rows mot computeMinRows(items). Brukes etter items-endring.
+// Vi ØKER bare aldri, slik at brukeren manuelt kan strekke høyden uten at vi
+// presser den ned igjen.
+function autoAdjustBlockRows(b) {
+  if (!b || !Array.isArray(b.items)) return;
+  const minRows = computeMinRows(b.items);
+  if (b.rows < minRows) b.rows = minRows;
+}
+
+// Standardisert form for en block (items-array)
 function ensureBlockShape(b) {
   if (!b) return;
   if (!b.id) b.id = genBlockId();
@@ -4337,7 +4381,6 @@ function ensureBlockShape(b) {
       rows: 1,
     };
   }
-  // Hvis gammel header hadde code/code_bg_color — strip dem
   delete b.header.code;
   delete b.header.code_bg_color;
   delete b.header.code_text_color;
@@ -4354,17 +4397,22 @@ function ensureBlockShape(b) {
   }
   if (!Array.isArray(b.footer.symbols)) b.footer.symbols = [];
 
-  // Content
-  if (!b.content_type) b.content_type = 'mc';
-  if (!b.content || typeof b.content !== 'object') {
-    b.content = defaultBlockContent(b.content_type);
-  }
-  // Normaliser count for mc/order
-  if (b.content_type === 'mc' || b.content_type === 'order') {
-    if (![2, 3, 4].includes(b.content.count)) b.content.count = 4;
-    if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
-    while (b.content.options.length < b.content.count) b.content.options.push('');
-  }
+  // Items-array (kjernen i nye modellen)
+  if (!Array.isArray(b.items)) b.items = [];
+  b.items.forEach(it => {
+    if (!it.id) it.id = genItemId();
+    if (!it.type) it.type = 'mc';
+    // Normaliser count for mc/order
+    if (it.type === 'mc' || it.type === 'order') {
+      if (![2, 3, 4].includes(it.count)) it.count = 4;
+      if (!Array.isArray(it.options)) it.options = ['', '', '', ''];
+      while (it.options.length < it.count) it.options.push('');
+    }
+  });
+
+  // Rydd vekk gamle felter hvis de er igjen
+  delete b.content_type;
+  delete b.content;
 }
 
 function createBlock() {
@@ -4372,7 +4420,7 @@ function createBlock() {
     id: genBlockId(),
     name: 'Ny block',
     cols: 10, rows: 7,
-    content_type: 'mc',
+    items: [defaultItem('mc')],
     triggered_by_cards: [],
     triggered_by_coords: [],
   };
@@ -4394,14 +4442,12 @@ function renderBlockList() {
     const cards = b.triggered_by_cards || [];
     const coords = b.triggered_by_coords || [];
     const triggerCount = cards.length + coords.length;
+    const itemCount = (b.items || []).length;
     const isActive = blockEditorState.activeBlockId === b.id;
-    const typeLabel = BLOCK_TYPES[b.content_type]?.label || '—';
-    const typeIcon = BLOCK_TYPES[b.content_type]?.icon || '?';
     return `
       <div class="bb-block-row ${isActive ? 'is-active' : ''}" onclick="openBlockEditor('${b.id}')">
-        <span class="bb-block-type-icon" title="${escapeHtml(typeLabel)}">${typeIcon}</span>
         <div class="bb-block-name">${escapeHtml(b.name || 'Uten navn')}</div>
-        <div class="bb-block-meta">${triggerCount}t</div>
+        <div class="bb-block-meta">${itemCount}i · ${triggerCount}t</div>
         <button class="bb-block-del" title="Slett block" onclick="event.stopPropagation();deleteBlock('${b.id}')">✕</button>
       </div>
     `;
@@ -4437,6 +4483,7 @@ function deleteBlock(blockId) {
 let blockEditorState = {
   activeBlockId: null,
   pickMode: false,
+  expandedItemIds: new Set(),  // hvilke item-kort er utvidet i editoren
 };
 
 function openBlockEditor(blockId) {
@@ -4445,6 +4492,11 @@ function openBlockEditor(blockId) {
   ensureBlockShape(block);
   blockEditorState.activeBlockId = blockId;
   blockEditorState.pickMode = false;
+  blockEditorState.expandedItemIds = new Set();
+  // Auto-ekspander første item slik at bruker ser noe med en gang
+  if (Array.isArray(block.items) && block.items.length > 0) {
+    blockEditorState.expandedItemIds.add(block.items[0].id);
+  }
 
   openModal({
     title: 'Block-editor: ' + (block.name || 'Uten navn'),
@@ -4460,6 +4512,7 @@ function openBlockEditor(blockId) {
 function closeBlockEditor() {
   blockEditorState.pickMode = false;
   blockEditorState.activeBlockId = null;
+  blockEditorState.expandedItemIds = new Set();
   hideTriggerPickPin();
   closeModal();
   if (state.currentScenarioId) {
@@ -4537,16 +4590,22 @@ function renderBlockEditorBody() {
         </div>
 
         <div class="be-section">
-          <h4>Innhold</h4>
-          <div class="field">
-            <label class="field-label">Type</label>
-            <select onchange="changeBlockType(this.value)" class="be-type-select">
-              ${Object.entries(BLOCK_TYPES).map(([key, info]) =>
-                `<option value="${key}" ${block.content_type === key ? 'selected' : ''}>${info.icon}  ${info.label}</option>`
+          <h4 style="display:flex;align-items:center;gap:8px;">
+            <span>Innhold (${(block.items || []).length} element${(block.items || []).length === 1 ? '' : 'er'})</span>
+            <span style="flex:1;"></span>
+            <select onchange="addBlockItemOfType(this.value);this.selectedIndex=0;" class="be-add-item-select">
+              <option value="">+ Legg til element...</option>
+              ${Object.entries(BLOCK_ITEM_TYPES).map(([key, info]) =>
+                `<option value="${key}">${info.icon}  ${info.label}</option>`
               ).join('')}
             </select>
+          </h4>
+          <div id="be-items-list" class="be-items-list">
+            ${renderBlockItemsList(block)}
           </div>
-          ${renderBlockContentEditor(block)}
+          <div class="muted" style="font-size:11px;margin-top:8px;line-height:1.4;">
+            Dra elementer for å endre rekkefølge. Block-høyden øker automatisk når du legger til.
+          </div>
         </div>
 
         <div class="be-section">
@@ -4600,198 +4659,309 @@ function renderColorPicker(currentValue, field, updateFn) {
   return html;
 }
 
-function renderBlockContentEditor(block) {
-  const t = block.content_type;
-  const c = block.content || {};
-  if (t === 'mc') return renderContentEditorMC(c);
-  if (t === 'text') return renderContentEditorText(c);
-  if (t === 'order') return renderContentEditorOrder(c);
-  if (t === 'unlock') return renderContentEditorFreeText(c, 'Beskrivelse av boks/lås', 'Tekst som forteller deltagerne hva som skal låses opp');
-  if (t === 'new_clues') return renderContentEditorFreeText(c, 'Hvilke kort skal åpnes', 'Beskriv hvilke ledetråder/kort spillerne nå får tilgang til');
-  if (t === 'place_clues') return renderContentEditorFreeText(c, 'Instruks om plassering', 'Beskriv hva som skal plasseres hvor');
+function renderBlockItemsList(block) {
+  const items = block.items || [];
+  if (items.length === 0) {
+    return '<div class="muted" style="font-style:italic;padding:14px;text-align:center;font-size:13px;">Ingen elementer ennå. Bruk dropdown over for å legge til.</div>';
+  }
+  return items.map((it, idx) => renderBlockItemCard(it, idx, items.length)).join('');
+}
+
+function renderBlockItemCard(item, idx, total) {
+  const info = BLOCK_ITEM_TYPES[item.type] || { label: '?', icon: '?' };
+  // Items er kollapserbare for å spare plass når man har mange.
+  const isExpanded = blockEditorState.expandedItemIds.has(item.id);
+  return `
+    <div class="be-item-card" data-item-id="${item.id}" draggable="true"
+         ondragstart="onItemDragStart(event, '${item.id}')"
+         ondragover="onItemDragOver(event, '${item.id}')"
+         ondragleave="onItemDragLeave(event)"
+         ondrop="onItemDrop(event, '${item.id}')"
+         ondragend="onItemDragEnd(event)">
+      <div class="be-item-head" onclick="toggleItemExpanded('${item.id}')">
+        <span class="be-item-drag" title="Dra for å endre rekkefølge">⋮⋮</span>
+        <span class="be-item-num">${idx + 1}</span>
+        <span class="be-item-type-icon">${info.icon}</span>
+        <select class="be-item-type-select" onclick="event.stopPropagation();" onchange="changeItemType('${item.id}', this.value)">
+          ${Object.entries(BLOCK_ITEM_TYPES).map(([key, i]) =>
+            `<option value="${key}" ${item.type === key ? 'selected' : ''}>${i.icon}  ${i.label}</option>`
+          ).join('')}
+        </select>
+        <span class="be-item-summary">${renderItemSummary(item)}</span>
+        <button class="be-item-up" title="Flytt opp" onclick="event.stopPropagation();moveItem('${item.id}', -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+        <button class="be-item-down" title="Flytt ned" onclick="event.stopPropagation();moveItem('${item.id}', 1)" ${idx === total - 1 ? 'disabled' : ''}>▼</button>
+        <button class="be-item-del" title="Slett element" onclick="event.stopPropagation();removeBlockItem('${item.id}')">✕</button>
+        <span class="be-item-chevron">${isExpanded ? '▾' : '▸'}</span>
+      </div>
+      ${isExpanded ? `<div class="be-item-body">${renderItemEditor(item)}</div>` : ''}
+    </div>
+  `;
+}
+
+// Kort sammendrag som vises på sammenfoldet kort
+function renderItemSummary(item) {
+  const text = item.question || item.instruction || item.text || '';
+  if (!text) return '<em class="muted" style="font-size:11px;">(tomt)</em>';
+  const short = text.length > 60 ? text.slice(0, 57) + '...' : text;
+  return `<span class="be-item-summary-text">${escapeHtml(short)}</span>`;
+}
+
+function renderItemEditor(item) {
+  if (item.type === 'mc')          return renderItemEditorMC(item);
+  if (item.type === 'text')        return renderItemEditorText(item);
+  if (item.type === 'order')       return renderItemEditorOrder(item);
+  if (item.type === 'unlock')      return renderItemEditorFreeText(item, 'Beskrivelse av boks/lås', 'Tekst som forteller deltagerne hva som skal låses opp');
+  if (item.type === 'new_clues')   return renderItemEditorFreeText(item, 'Hvilke kort skal åpnes', 'Beskriv hvilke ledetråder/kort spillerne nå får tilgang til');
+  if (item.type === 'place_clues') return renderItemEditorFreeText(item, 'Instruks om plassering', 'Beskriv hva som skal plasseres hvor');
   return '<div class="muted">Ukjent type</div>';
 }
 
-function renderContentEditorMC(c) {
-  if (!Array.isArray(c.options)) c.options = ['', '', '', ''];
-  while (c.options.length < (c.count || 4)) c.options.push('');
-  const count = c.count || 4;
+function renderItemEditorMC(item) {
+  if (!Array.isArray(item.options)) item.options = ['', '', '', ''];
+  while (item.options.length < (item.count || 4)) item.options.push('');
+  const count = item.count || 4;
   return `
     <div class="field">
       <label class="field-label">Spørsmål</label>
-      <textarea rows="2" oninput="updateBlockContent('question', this.value)">${escapeHtml(c.question || '')}</textarea>
+      <textarea rows="2" oninput="updateItemField('${item.id}', 'question', this.value)">${escapeHtml(item.question || '')}</textarea>
     </div>
     <div class="field">
       <label class="field-label">Antall svaralternativer</label>
       <div class="be-count-switch">
         ${[2, 3, 4].map(n => `
-          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateBlockContentCount(${n})">${n}</button>
+          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateItemCount('${item.id}', ${n})">${n}</button>
         `).join('')}
       </div>
     </div>
     <div class="field">
       <label class="field-label">Svaralternativer (velg riktig)</label>
       ${[0, 1, 2, 3].slice(0, count).map(i => `
-        <div class="be-option-row ${c.correct_index === i ? 'is-correct' : ''}">
-          <button type="button" class="be-option-letter" onclick="updateBlockContent('correct_index', ${i})" title="Sett som riktig svar">${'ABCD'[i]}</button>
-          <input type="text" value="${escapeHtml(c.options[i] || '')}" placeholder="Svaralternativ ${'ABCD'[i]}"
-                 oninput="updateBlockContentOption(${i}, this.value)">
-          ${c.correct_index === i
+        <div class="be-option-row ${item.correct_index === i ? 'is-correct' : ''}">
+          <button type="button" class="be-option-letter" onclick="updateItemField('${item.id}', 'correct_index', ${i})" title="Sett som riktig svar">${'ABCD'[i]}</button>
+          <input type="text" value="${escapeHtml(item.options[i] || '')}" placeholder="Svaralternativ ${'ABCD'[i]}"
+                 oninput="updateItemOption('${item.id}', ${i}, this.value)">
+          ${item.correct_index === i
             ? '<span class="be-option-check">✓ Riktig</span>'
-            : `<button type="button" class="btn btn-sm btn-ghost" onclick="updateBlockContent('correct_index', ${i})">Sett riktig</button>`}
+            : `<button type="button" class="btn btn-sm btn-ghost" onclick="updateItemField('${item.id}', 'correct_index', ${i})">Sett riktig</button>`}
         </div>
       `).join('')}
     </div>
   `;
 }
 
-function renderContentEditorText(c) {
+function renderItemEditorText(item) {
   return `
     <div class="field">
       <label class="field-label">Spørsmål</label>
-      <textarea rows="2" oninput="updateBlockContent('question', this.value)">${escapeHtml(c.question || '')}</textarea>
+      <textarea rows="2" oninput="updateItemField('${item.id}', 'question', this.value)">${escapeHtml(item.question || '')}</textarea>
     </div>
     <div class="field">
       <label class="field-label">Fasit-svar</label>
-      <input type="text" value="${escapeHtml(c.correct_answer || '')}" placeholder="Det riktige svaret"
-             oninput="updateBlockContent('correct_answer', this.value)">
-      <span class="field-hint">Brukes for validering når spille-flyten er implementert. Sammenligning er case-insensitive.</span>
+      <input type="text" value="${escapeHtml(item.correct_answer || '')}" placeholder="Det riktige svaret"
+             oninput="updateItemField('${item.id}', 'correct_answer', this.value)">
+      <span class="field-hint">Brukes for validering senere. Case-insensitive sammenligning.</span>
     </div>
   `;
 }
 
-function renderContentEditorOrder(c) {
-  if (!Array.isArray(c.options)) c.options = ['', '', '', ''];
-  while (c.options.length < (c.count || 4)) c.options.push('');
-  const count = c.count || 4;
+function renderItemEditorOrder(item) {
+  if (!Array.isArray(item.options)) item.options = ['', '', '', ''];
+  while (item.options.length < (item.count || 4)) item.options.push('');
+  const count = item.count || 4;
   return `
     <div class="field">
       <label class="field-label">Instruks</label>
-      <textarea rows="2" oninput="updateBlockContent('instruction', this.value)">${escapeHtml(c.instruction || '')}</textarea>
+      <textarea rows="2" oninput="updateItemField('${item.id}', 'instruction', this.value)">${escapeHtml(item.instruction || '')}</textarea>
       <span class="field-hint">F.eks. «Sett hendelsene i riktig kronologisk rekkefølge»</span>
     </div>
     <div class="field">
       <label class="field-label">Antall alternativer</label>
       <div class="be-count-switch">
         ${[2, 3, 4].map(n => `
-          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateBlockContentCount(${n})">${n}</button>
+          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateItemCount('${item.id}', ${n})">${n}</button>
         `).join('')}
       </div>
     </div>
     <div class="field">
-      <label class="field-label">Alternativer (skriv inn i RIKTIG rekkefølge — vises stokket for spilleren senere)</label>
+      <label class="field-label">Alternativer (skriv i RIKTIG rekkefølge — stokkes for spilleren senere)</label>
       ${[0, 1, 2, 3].slice(0, count).map(i => `
         <div class="be-option-row">
           <span class="be-option-letter">${i + 1}</span>
-          <input type="text" value="${escapeHtml(c.options[i] || '')}" placeholder="Steg ${i + 1}"
-                 oninput="updateBlockContentOption(${i}, this.value)">
+          <input type="text" value="${escapeHtml(item.options[i] || '')}" placeholder="Steg ${i + 1}"
+                 oninput="updateItemOption('${item.id}', ${i}, this.value)">
         </div>
       `).join('')}
     </div>
   `;
 }
 
-function renderContentEditorFreeText(c, label, hint) {
+function renderItemEditorFreeText(item, label, hint) {
   return `
     <div class="field">
       <label class="field-label">${escapeHtml(label)}</label>
-      <textarea rows="4" oninput="updateBlockContent('text', this.value)">${escapeHtml(c.text || '')}</textarea>
+      <textarea rows="4" oninput="updateItemField('${item.id}', 'text', this.value)">${escapeHtml(item.text || '')}</textarea>
       <span class="field-hint">${escapeHtml(hint)}</span>
     </div>
     <div class="field">
       <label class="field-label">Fasit-svar (valgfritt)</label>
-      <input type="text" value="${escapeHtml(c.correct_answer || '')}" placeholder="Valgfritt — brukes hvis spilleren skal taste inn et svar"
-             oninput="updateBlockContent('correct_answer', this.value)">
-      <span class="field-hint">Lar deg knytte et fasit-svar til denne blokken for senere validering.</span>
+      <input type="text" value="${escapeHtml(item.correct_answer || '')}" placeholder="Valgfritt — for senere validering"
+             oninput="updateItemField('${item.id}', 'correct_answer', this.value)">
     </div>
   `;
 }
 
-/* ─── UPDATE HELPERS ───────────────────────────────────── */
-function updateBlockField(field, value) {
+/* ─── ITEMS-OPERASJONER ──────────────────────────────── */
+function addBlockItemOfType(type) {
+  if (!type || !BLOCK_ITEM_TYPES[type]) return;
   const b = currentEditingBlock();
   if (!b) return;
-  b[field] = value;
-  if (field === 'name') {
-    const t = $('#modal-title');
-    if (t) t.textContent = 'Block-editor: ' + (value || 'Uten navn');
-    renderBlockList();
-  }
-  refreshBlockPreview();
-}
-
-function updateBlockSize(field, value) {
-  const b = currentEditingBlock();
-  if (!b) return;
-  const n = parseInt(value, 10);
-  if (isNaN(n) || n < 4) return;
-  b[field] = n;
-  refreshBlockPreview();
-}
-
-function updateBlockHeader(field, value) {
-  const b = currentEditingBlock();
-  if (!b) return;
-  b.header[field] = value;
-  refreshBlockPreview();
-  // Bare re-render hele editoren ved fargevalg (slik at palette-knappens 
-  // selected-state oppdateres). Tekstinput skal IKKE trigge refresh —
-  // det ville miste cursor-fokus.
-  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
-}
-
-function updateBlockFooter(field, value) {
-  const b = currentEditingBlock();
-  if (!b) return;
-  b.footer[field] = value;
-  refreshBlockPreview();
-  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
-}
-
-function updateBlockContent(field, value) {
-  const b = currentEditingBlock();
-  if (!b) return;
-  if (!b.content) b.content = {};
-  b.content[field] = value;
-  if (field === 'correct_index') refreshBlockEditor();
-  else refreshBlockPreview();
-}
-
-function updateBlockContentOption(idx, value) {
-  const b = currentEditingBlock();
-  if (!b || !b.content) return;
-  if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
-  b.content.options[idx] = value;
-  refreshBlockPreview();
-}
-
-function updateBlockContentCount(n) {
-  const b = currentEditingBlock();
-  if (!b || !b.content) return;
-  b.content.count = n;
-  if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
-  while (b.content.options.length < n) b.content.options.push('');
-  // Hvis correct_index er utenfor nye count, juster
-  if (b.content.correct_index !== undefined && b.content.correct_index >= n) {
-    b.content.correct_index = 0;
-  }
-  refreshBlockEditor();
-}
-
-function changeBlockType(newType) {
-  const b = currentEditingBlock();
-  if (!b) return;
-  // Bevar tekst hvis det gir mening
-  const oldText = b.content?.text || b.content?.question || b.content?.instruction || '';
-  b.content_type = newType;
-  b.content = defaultBlockContent(newType);
-  // Forsøk å bevare tekst
-  if ('text' in b.content) b.content.text = oldText;
-  else if ('question' in b.content) b.content.question = oldText;
-  else if ('instruction' in b.content) b.content.instruction = oldText;
+  if (!Array.isArray(b.items)) b.items = [];
+  const newItem = defaultItem(type);
+  b.items.push(newItem);
+  // Auto-ekspander nytt item slik at brukeren ser det med en gang
+  blockEditorState.expandedItemIds.add(newItem.id);
+  autoAdjustBlockRows(b);
   refreshBlockEditor();
   renderBlockList();
 }
+
+function removeBlockItem(itemId) {
+  const b = currentEditingBlock();
+  if (!b || !Array.isArray(b.items)) return;
+  const idx = b.items.findIndex(it => it.id === itemId);
+  if (idx < 0) return;
+  if (!confirm('Slette dette elementet?')) return;
+  b.items.splice(idx, 1);
+  blockEditorState.expandedItemIds.delete(itemId);
+  refreshBlockEditor();
+  renderBlockList();
+}
+
+function moveItem(itemId, delta) {
+  const b = currentEditingBlock();
+  if (!b || !Array.isArray(b.items)) return;
+  const idx = b.items.findIndex(it => it.id === itemId);
+  if (idx < 0) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= b.items.length) return;
+  const [item] = b.items.splice(idx, 1);
+  b.items.splice(newIdx, 0, item);
+  refreshItemsList();
+}
+
+function toggleItemExpanded(itemId) {
+  if (blockEditorState.expandedItemIds.has(itemId)) {
+    blockEditorState.expandedItemIds.delete(itemId);
+  } else {
+    blockEditorState.expandedItemIds.add(itemId);
+  }
+  refreshItemsList();
+}
+
+function changeItemType(itemId, newType) {
+  if (!BLOCK_ITEM_TYPES[newType]) return;
+  const b = currentEditingBlock();
+  if (!b || !Array.isArray(b.items)) return;
+  const idx = b.items.findIndex(it => it.id === itemId);
+  if (idx < 0) return;
+  const old = b.items[idx];
+  const newItem = defaultItem(newType);
+  newItem.id = old.id;  // behold id slik at expandedItemIds fortsatt peker rett
+  // Forsøk å bevare tekst
+  const oldText = old.question || old.instruction || old.text || '';
+  if ('text' in newItem) newItem.text = oldText;
+  else if ('question' in newItem) newItem.question = oldText;
+  else if ('instruction' in newItem) newItem.instruction = oldText;
+  b.items[idx] = newItem;
+  autoAdjustBlockRows(b);
+  refreshBlockEditor();
+}
+
+function updateItemField(itemId, field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  const it = (b.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  it[field] = value;
+  // correct_index krever full re-render (radio-tilstand)
+  if (field === 'correct_index') refreshItemsList();
+  else refreshBlockPreview();
+}
+
+function updateItemOption(itemId, optIdx, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  const it = (b.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  if (!Array.isArray(it.options)) it.options = ['', '', '', ''];
+  it.options[optIdx] = value;
+  refreshBlockPreview();
+}
+
+function updateItemCount(itemId, n) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  const it = (b.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  it.count = n;
+  if (!Array.isArray(it.options)) it.options = ['', '', '', ''];
+  while (it.options.length < n) it.options.push('');
+  if (it.correct_index !== undefined && it.correct_index >= n) it.correct_index = 0;
+  refreshItemsList();
+}
+
+// Re-render kun items-listen (bevarer fokus i andre felter i editor)
+function refreshItemsList() {
+  const b = currentEditingBlock();
+  const el = $('#be-items-list');
+  if (el && b) el.innerHTML = renderBlockItemsList(b);
+  refreshBlockPreview();
+  renderBlockList();
+}
+
+/* ─── DRAG-AND-DROP for items ────────────────────────── */
+let itemDragState = { draggedId: null };
+
+function onItemDragStart(e, itemId) {
+  itemDragState.draggedId = itemId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', itemId);
+  e.currentTarget.classList.add('is-dragging');
+}
+
+function onItemDragOver(e, itemId) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (itemDragState.draggedId && itemDragState.draggedId !== itemId) {
+    e.currentTarget.classList.add('drag-over');
+  }
+}
+
+function onItemDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+function onItemDrop(e, targetId) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const draggedId = itemDragState.draggedId;
+  if (!draggedId || draggedId === targetId) return;
+  const b = currentEditingBlock();
+  if (!b || !Array.isArray(b.items)) return;
+  const fromIdx = b.items.findIndex(it => it.id === draggedId);
+  const toIdx = b.items.findIndex(it => it.id === targetId);
+  if (fromIdx < 0 || toIdx < 0) return;
+  const [moved] = b.items.splice(fromIdx, 1);
+  b.items.splice(toIdx, 0, moved);
+  refreshItemsList();
+}
+
+function onItemDragEnd(e) {
+  e.currentTarget.classList.remove('is-dragging');
+  document.querySelectorAll('.be-item-card.drag-over').forEach(el => el.classList.remove('drag-over'));
+  itemDragState.draggedId = null;
+}
+
 
 function refreshBlockEditor() {
   const body = $('#modal-body');
@@ -4840,48 +5010,55 @@ function renderBlockPreview(block) {
 }
 
 function renderBlockContentPreview(block) {
-  const c = block.content || {};
-  const t = block.content_type;
+  const items = block.items || [];
+  if (items.length === 0) {
+    return '<div class="muted" style="font-style:italic;text-align:center;padding:30px 0;">Ingen innhold ennå.</div>';
+  }
+  return items.map(it => renderItemPreview(it)).join('<hr class="be-prev-sep">');
+}
+
+function renderItemPreview(item) {
+  const t = item.type;
   if (t === 'mc') {
-    const count = c.count || 4;
-    let html = `<div class="be-prev-question">${escapeHtml(c.question || '(spørsmål)')}</div>`;
+    const count = item.count || 4;
+    let html = `<div class="be-prev-item"><div class="be-prev-question">${escapeHtml(item.question || '(spørsmål)')}</div>`;
     html += '<div class="be-prev-options">';
     for (let i = 0; i < count; i++) {
-      const isCorrect = c.correct_index === i;
+      const isCorrect = item.correct_index === i;
       html += `<div class="be-prev-option ${isCorrect ? 'is-correct' : ''}">
         <span class="be-prev-option-letter">${'ABCD'[i]}</span>
-        <span>${escapeHtml(c.options?.[i] || `(alternativ ${'ABCD'[i]})`)}</span>
+        <span>${escapeHtml(item.options?.[i] || `(alternativ ${'ABCD'[i]})`)}</span>
         ${isCorrect ? '<span class="be-prev-check">✓</span>' : ''}
       </div>`;
     }
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
   if (t === 'text') {
-    return `
-      <div class="be-prev-question">${escapeHtml(c.question || '(spørsmål)')}</div>
+    return `<div class="be-prev-item">
+      <div class="be-prev-question">${escapeHtml(item.question || '(spørsmål)')}</div>
       <div class="be-prev-input-line">Svar: ____________________________</div>
-      ${c.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(c.correct_answer)}</div>` : ''}
-    `;
+      ${item.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(item.correct_answer)}</div>` : ''}
+    </div>`;
   }
   if (t === 'order') {
-    const count = c.count || 4;
-    let html = `<div class="be-prev-question">${escapeHtml(c.instruction || '(instruks)')}</div>`;
+    const count = item.count || 4;
+    let html = `<div class="be-prev-item"><div class="be-prev-question">${escapeHtml(item.instruction || '(instruks)')}</div>`;
     html += '<div class="be-prev-options">';
     for (let i = 0; i < count; i++) {
       html += `<div class="be-prev-option">
         <span class="be-prev-option-letter">${i + 1}</span>
-        <span>${escapeHtml(c.options?.[i] || `(steg ${i + 1})`)}</span>
+        <span>${escapeHtml(item.options?.[i] || `(steg ${i + 1})`)}</span>
       </div>`;
     }
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
   // Unlock / new_clues / place_clues
-  return `
-    <div class="be-prev-text">${escapeHtml(c.text || `(${BLOCK_TYPES[t]?.label || 'innhold'})`)}</div>
-    ${c.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(c.correct_answer)}</div>` : ''}
-  `;
+  return `<div class="be-prev-item">
+    <div class="be-prev-text">${escapeHtml(item.text || `(${BLOCK_ITEM_TYPES[t]?.label || 'innhold'})`)}</div>
+    ${item.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(item.correct_answer)}</div>` : ''}
+  </div>`;
 }
 
 /* ─── TRIGGER PICK (uendret fra forrige iter) ──────────── */
@@ -5136,24 +5313,49 @@ function renderBlockForExport(block) {
 }
 
 function renderBlockContentSVG(block, x, y, w, h, esc) {
-  const c = block.content || {};
-  const t = block.content_type;
+  const items = block.items || [];
+  if (items.length === 0) return '';
+
+  // Fordel høyden mellom items basert på weight
+  const totalWeight = items.reduce((sum, it) => sum + itemWeight(it.type), 0) || 1;
+  const sepH = items.length > 1 ? 8 : 0;  // separator-høyde mellom items
+  const availH = h - sepH * (items.length - 1);
+
+  let s = '';
+  let cursorY = y;
+  items.forEach((item, idx) => {
+    const itemH = availH * (itemWeight(item.type) / totalWeight);
+    s += renderItemSVG(item, x, cursorY, w, itemH, esc);
+    cursorY += itemH;
+    // Separator
+    if (idx < items.length - 1) {
+      const sepY = cursorY + sepH / 2;
+      s += `<line x1="${x + w * 0.06}" y1="${sepY}" x2="${x + w * 0.94}" y2="${sepY}"
+              stroke="#c8bfaa" stroke-width="1" stroke-dasharray="4 4"/>`;
+      cursorY += sepH;
+    }
+  });
+  return s;
+}
+
+function renderItemSVG(item, x, y, w, h, esc) {
+  const t = item.type;
   const pad = w * 0.04;
   const cx = x + pad;
   const cw = w - 2 * pad;
   let s = '';
 
   if (t === 'mc') {
-    const count = c.count || 4;
-    const qFz = Math.min(h * 0.10, 42);
-    const optFz = Math.min(h * 0.08, 32);
-    const qY = y + h * 0.12;
+    const count = item.count || 4;
+    const qFz = Math.min(h * 0.16, 38);
+    const optFz = Math.min(h * 0.12, 28);
+    const qY = y + h * 0.10;
     s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
-            font-weight="700" fill="#1a1610">${wrapSvgText(c.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
-    const optStartY = y + h * 0.30;
-    const rowH = (h * 0.65) / count;
+            font-weight="700" fill="#1a1610">${wrapSvgText(item.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
+    const optStartY = y + h * 0.32;
+    const rowH = (h * 0.62) / count;
     for (let i = 0; i < count; i++) {
-      const isCorrect = c.correct_index === i;
+      const isCorrect = item.correct_index === i;
       const rowY = optStartY + i * rowH;
       const bgFill = isCorrect ? '#2a6b3c' : '#ede8dc';
       const fg = isCorrect ? '#ffffff' : '#1a1610';
@@ -5162,7 +5364,7 @@ function renderBlockContentSVG(block, x, y, w, h, esc) {
       s += `<text x="${cx + rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
               font-family="Barlow Condensed" font-size="${optFz}" font-weight="700" fill="${fg}">${'ABCD'[i]}</text>`;
       s += `<text x="${cx + rowH * 1.15}" y="${rowY + rowH * 0.425}" dominant-baseline="middle"
-              font-family="Barlow Condensed" font-size="${optFz}" fill="${fg}">${esc(c.options?.[i] || '')}</text>`;
+              font-family="Barlow Condensed" font-size="${optFz}" fill="${fg}">${esc(item.options?.[i] || '')}</text>`;
       if (isCorrect) {
         s += `<text x="${cx + cw - rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
                 font-family="Barlow Condensed" font-size="${optFz * 1.2}" font-weight="700" fill="#fff">✓</text>`;
@@ -5172,33 +5374,33 @@ function renderBlockContentSVG(block, x, y, w, h, esc) {
   }
 
   if (t === 'text') {
-    const qFz = Math.min(h * 0.11, 44);
-    const inputFz = Math.min(h * 0.10, 36);
-    const fasitFz = Math.min(h * 0.07, 24);
-    const qY = y + h * 0.15;
+    const qFz = Math.min(h * 0.20, 36);
+    const inputFz = Math.min(h * 0.16, 28);
+    const fasitFz = Math.min(h * 0.12, 20);
+    const qY = y + h * 0.18;
     s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
-            font-weight="700" fill="#1a1610">${wrapSvgText(c.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
-    const lineY = y + h * 0.55;
+            font-weight="700" fill="#1a1610">${wrapSvgText(item.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
+    const lineY = y + h * 0.62;
     s += `<text x="${cx}" y="${lineY}" font-family="Barlow Condensed" font-size="${inputFz}" fill="#6b6050">Svar:</text>`;
     s += `<line x1="${cx + inputFz * 2.5}" y1="${lineY + 4}" x2="${cx + cw - 10}" y2="${lineY + 4}"
             stroke="#3d3628" stroke-width="2"/>`;
-    if (c.correct_answer) {
-      const fY = y + h * 0.85;
+    if (item.correct_answer) {
+      const fY = y + h * 0.92;
       s += `<text x="${cx}" y="${fY}" font-family="Barlow Condensed" font-size="${fasitFz}"
-              font-style="italic" fill="#2a6b3c">Fasit: ${esc(c.correct_answer)}</text>`;
+              font-style="italic" fill="#2a6b3c">Fasit: ${esc(item.correct_answer)}</text>`;
     }
     return s;
   }
 
   if (t === 'order') {
-    const count = c.count || 4;
-    const qFz = Math.min(h * 0.10, 38);
-    const optFz = Math.min(h * 0.08, 30);
-    const qY = y + h * 0.12;
+    const count = item.count || 4;
+    const qFz = Math.min(h * 0.15, 34);
+    const optFz = Math.min(h * 0.12, 26);
+    const qY = y + h * 0.10;
     s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
-            font-weight="700" fill="#1a1610">${wrapSvgText(c.instruction || '(instruks)', cw, qFz, esc, cx)}</text>`;
-    const optStartY = y + h * 0.30;
-    const rowH = (h * 0.65) / count;
+            font-weight="700" fill="#1a1610">${wrapSvgText(item.instruction || '(instruks)', cw, qFz, esc, cx)}</text>`;
+    const optStartY = y + h * 0.32;
+    const rowH = (h * 0.62) / count;
     for (let i = 0; i < count; i++) {
       const rowY = optStartY + i * rowH;
       s += `<rect x="${cx}" y="${rowY}" width="${cw}" height="${rowH * 0.85}" rx="3" fill="#ede8dc"/>`;
@@ -5206,23 +5408,23 @@ function renderBlockContentSVG(block, x, y, w, h, esc) {
       s += `<text x="${cx + rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
               font-family="Barlow Condensed" font-size="${optFz}" font-weight="700" fill="#fff">${i + 1}</text>`;
       s += `<text x="${cx + rowH * 1.15}" y="${rowY + rowH * 0.425}" dominant-baseline="middle"
-              font-family="Barlow Condensed" font-size="${optFz}" fill="#1a1610">${esc(c.options?.[i] || '')}</text>`;
+              font-family="Barlow Condensed" font-size="${optFz}" fill="#1a1610">${esc(item.options?.[i] || '')}</text>`;
     }
     return s;
   }
 
   // Unlock / new_clues / place_clues
-  const tFz = Math.min(h * 0.10, 38);
-  const fasitFz = Math.min(h * 0.07, 24);
-  const topY = y + h * 0.18;
-  const lines = wrapTextLines(c.text || `(${BLOCK_TYPES[t]?.label || 'innhold'})`, Math.floor(cw / (tFz * 0.5)));
-  lines.slice(0, 5).forEach((line, i) => {
+  const tFz = Math.min(h * 0.18, 30);
+  const fasitFz = Math.min(h * 0.12, 20);
+  const topY = y + h * 0.25;
+  const lines = wrapTextLines(item.text || `(${BLOCK_ITEM_TYPES[t]?.label || 'innhold'})`, Math.floor(cw / (tFz * 0.5)));
+  lines.slice(0, 4).forEach((line, i) => {
     s += `<text x="${cx}" y="${topY + i * tFz * 1.3}" font-family="Libre Baskerville, Georgia, serif"
             font-size="${tFz}" fill="#1a1610">${esc(line)}</text>`;
   });
-  if (c.correct_answer) {
-    s += `<text x="${cx}" y="${y + h - h * 0.10}" font-family="Barlow Condensed" font-size="${fasitFz}"
-            font-style="italic" fill="#2a6b3c">Fasit: ${esc(c.correct_answer)}</text>`;
+  if (item.correct_answer) {
+    s += `<text x="${cx}" y="${y + h - h * 0.08}" font-family="Barlow Condensed" font-size="${fasitFz}"
+            font-style="italic" fill="#2a6b3c">Fasit: ${esc(item.correct_answer)}</text>`;
   }
   return s;
 }
