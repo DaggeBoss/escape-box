@@ -1464,7 +1464,20 @@ function ensureScenarioShape(sc) {
     if (c.rewards !== undefined) delete c.rewards;
   });
 
-  // Migrer blocks (sett standard-felt på hvert)
+  // Slett gamle blocks (laget med forrige template-editor-iterasjon).
+  // Kjennetegn: mangler content_type, eller har content.layers (free-form
+  // bildelag fra template-editor). De nye blockene er strukturerte med
+  // content_type og content som type-spesifikt objekt.
+  sd.blocks = sd.blocks.filter(b => {
+    const isOldBlock = !b.content_type || (b.content && Array.isArray(b.content.layers));
+    if (isOldBlock) {
+      console.warn('[Blocks] Slettet gammel block:', b.name || b.id);
+      return false;
+    }
+    return true;
+  });
+
+  // Migrer blocks (sett standard-felt på hver)
   sd.blocks.forEach(b => ensureBlockShape(b));
 }
 
@@ -4263,66 +4276,103 @@ function removeCoord(idx) {
 
 /* ════════════════════════════════════════════════════════
    BLOCKS — informasjonspaneler som utløses av kort/koordinater
-   
-   En block er et frittstående visuelt panel (samme designverktøy
-   som template-kort) som dokumenterer spillflyten. Den har en
-   liste over hvilke kort og koordinater som utløser den.
-   
-   - bor i scenario_data.blocks[]
-   - åpnes for redigering i samme template-editor som kort
-   - eksporteres som PNG til /Escape Box/scenarios/{id}/blocks/
-   - vises i sidekolonne på Investigation board
+
+   En block er et frittstående visuelt panel som dokumenterer
+   spillflyten. Den har:
+   - en innholds-type (6 valg) som styrer hva som vises i midten
+   - header (tittel + farger, INGEN 4-kode)
+   - footer (tekst + symboler + farger)
+   - en liste over hvilke kort og koordinater som utløser den
+
+   Bor i scenario_data.blocks[]. Eksporteres som PNG til
+   /Escape Box/scenarios/{id}/blocks/Block-{navn}.png ved
+   scenario-lagring.
    ──────────────────────────────────────────────────────── */
 
-// Standardisert form for en block (kompatibel med template-editor)
+// Default content for hver type. Brukes ved opprettelse og typebytte.
+const BLOCK_TYPES = {
+  mc:          { label: 'Multiple choice',  icon: '◉' },
+  text:        { label: 'Text input',       icon: '✎' },
+  order:       { label: 'Ordering',         icon: '⇅' },
+  unlock:      { label: 'Unlock',           icon: '🔓' },
+  new_clues:   { label: 'New clues',        icon: '✦' },
+  place_clues: { label: 'Place clues',      icon: '⊞' },
+};
+
+function defaultBlockContent(type) {
+  switch (type) {
+    case 'mc':
+      return { question: '', count: 4, options: ['', '', '', ''], correct_index: 0 };
+    case 'text':
+      return { question: '', correct_answer: '' };
+    case 'order':
+      return { instruction: '', count: 4, options: ['', '', '', ''] };
+    case 'unlock':
+      return { text: '', correct_answer: '' };
+    case 'new_clues':
+      return { text: '', correct_answer: '' };
+    case 'place_clues':
+      return { text: '', correct_answer: '' };
+    default:
+      return { text: '' };
+  }
+}
+
+// Standardisert form for en block
 function ensureBlockShape(b) {
   if (!b) return;
   if (!b.id) b.id = genBlockId();
   if (!b.name) b.name = 'Block';
-  if (!b.cols) b.cols = 5;
+  if (!b.cols) b.cols = 10;
   if (!b.rows) b.rows = 7;
   if (!Array.isArray(b.triggered_by_cards)) b.triggered_by_cards = [];
   if (!Array.isArray(b.triggered_by_coords)) b.triggered_by_coords = [];
+
+  // Header (uten 4-kode for blocks)
   if (!b.header) {
     b.header = {
       title: b.name || 'Block',
-      code: '',
       bg_color: '#2a6b3c',
       text_color: '#ffffff',
-      code_bg_color: '#c8961a',
-      code_text_color: '#1a1610',
-      rows: HEADER_DEFAULT_ROWS,
+      rows: 1,
     };
   }
-  if (b.header.code_bg_color == null) b.header.code_bg_color = '#c8961a';
-  if (b.header.code_text_color == null) b.header.code_text_color = '#1a1610';
+  // Hvis gammel header hadde code/code_bg_color — strip dem
+  delete b.header.code;
+  delete b.header.code_bg_color;
+  delete b.header.code_text_color;
 
+  // Footer
   if (!b.footer) {
     b.footer = {
-      items: [],
+      text: '',
       bg_color: '#ede8dc',
       text_color: '#1a1610',
-      rows: FOOTER_DEFAULT_ROWS,
+      symbols: [],
+      rows: 1,
     };
   }
-  if (!b.content) {
-    b.content = {
-      layers: [],
-      bg_color: '#faf8f3',
-    };
+  if (!Array.isArray(b.footer.symbols)) b.footer.symbols = [];
+
+  // Content
+  if (!b.content_type) b.content_type = 'mc';
+  if (!b.content || typeof b.content !== 'object') {
+    b.content = defaultBlockContent(b.content_type);
   }
-  if (!Array.isArray(b.overlays)) b.overlays = [];
-  // Marker som block-type slik at template-editor kan tilpasse seg
-  b.type = 'block';
+  // Normaliser count for mc/order
+  if (b.content_type === 'mc' || b.content_type === 'order') {
+    if (![2, 3, 4].includes(b.content.count)) b.content.count = 4;
+    if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
+    while (b.content.options.length < b.content.count) b.content.options.push('');
+  }
 }
 
 function createBlock() {
   const b = {
     id: genBlockId(),
     name: 'Ny block',
-    type: 'block',
-    cols: 5,
-    rows: 7,
+    cols: 10, rows: 7,
+    content_type: 'mc',
     triggered_by_cards: [],
     triggered_by_coords: [],
   };
@@ -4340,15 +4390,18 @@ function renderBlockList() {
     el.innerHTML = '<div class="muted" style="font-style:italic;font-size:11px;padding:6px;">Ingen blocks ennå. Klikk «+ Ny» for å lage en.</div>';
     return;
   }
-  el.innerHTML = blocks.map((b, i) => {
+  el.innerHTML = blocks.map((b) => {
     const cards = b.triggered_by_cards || [];
     const coords = b.triggered_by_coords || [];
     const triggerCount = cards.length + coords.length;
     const isActive = blockEditorState.activeBlockId === b.id;
+    const typeLabel = BLOCK_TYPES[b.content_type]?.label || '—';
+    const typeIcon = BLOCK_TYPES[b.content_type]?.icon || '?';
     return `
       <div class="bb-block-row ${isActive ? 'is-active' : ''}" onclick="openBlockEditor('${b.id}')">
+        <span class="bb-block-type-icon" title="${escapeHtml(typeLabel)}">${typeIcon}</span>
         <div class="bb-block-name">${escapeHtml(b.name || 'Uten navn')}</div>
-        <div class="bb-block-meta">${triggerCount} trigger${triggerCount === 1 ? '' : 'e'}</div>
+        <div class="bb-block-meta">${triggerCount}t</div>
         <button class="bb-block-del" title="Slett block" onclick="event.stopPropagation();deleteBlock('${b.id}')">✕</button>
       </div>
     `;
@@ -4380,15 +4433,10 @@ function deleteBlock(blockId) {
   renderBoard();
 }
 
-/* ─── BLOCK EDITOR STATE ─────────────────────────────────
-   Når en block er åpen for redigering vises trigger-info inne i
-   editoren. Pick-mode aktiveres med en knapp inne i editoren og
-   gjør at klikk på board-celler eller kort toggler triggere på
-   den aktive blocken.
-   ──────────────────────────────────────────────────────── */
+/* ─── BLOCK EDITOR STATE ───────────────────────────────── */
 let blockEditorState = {
-  activeBlockId: null,   // hvilken block som er åpen
-  pickMode: false,       // er trigger-pick-modus aktivert?
+  activeBlockId: null,
+  pickMode: false,
 };
 
 function openBlockEditor(blockId) {
@@ -4397,13 +4445,6 @@ function openBlockEditor(blockId) {
   ensureBlockShape(block);
   blockEditorState.activeBlockId = blockId;
   blockEditorState.pickMode = false;
-
-  // Sett opp template-editor til å redigere denne blocken
-  templateBuf = block;
-  templateTool = 'select';
-  templateSelectedZone = null;
-  templateSelectedLayer = -1;
-  templateSelectedFooterItem = -1;
 
   openModal({
     title: 'Block-editor: ' + (block.name || 'Uten navn'),
@@ -4417,11 +4458,6 @@ function openBlockEditor(blockId) {
 }
 
 function closeBlockEditor() {
-  templateBuf = null;
-  templateSelectedZone = null;
-  templateSelectedLayer = -1;
-  templateDrag = null;
-  // Avslutt også pick-modus hvis aktiv (lukker pin-en)
   blockEditorState.pickMode = false;
   blockEditorState.activeBlockId = null;
   hideTriggerPickPin();
@@ -4432,9 +4468,15 @@ function closeBlockEditor() {
   }
 }
 
-/* Editor-body = standard template-editor + trigger-panel på toppen */
+function currentEditingBlock() {
+  const id = blockEditorState.activeBlockId;
+  if (!id) return null;
+  return scenarioBuf.scenario_data.blocks.find(b => b.id === id);
+}
+
+/* ─── EDITOR BODY ──────────────────────────────────────── */
 function renderBlockEditorBody() {
-  const block = templateBuf;
+  const block = currentEditingBlock();
   if (!block) return '';
   return `
     <div class="block-trigger-panel">
@@ -4449,42 +4491,409 @@ function renderBlockEditorBody() {
       </div>
       <div id="block-trigger-summary">${renderBlockTriggerSummary(block)}</div>
     </div>
-    <div class="block-name-bar">
-      <label class="field-label" style="display:inline-block;margin-right:8px;">Block-navn</label>
-      <input type="text" value="${escapeHtml(block.name || '')}" oninput="updateBlockName(this.value)" style="max-width:380px;display:inline-block;">
+
+    <div class="be-layout">
+      <!-- Venstre: redigering -->
+      <div class="be-left">
+        <div class="be-section">
+          <h4>Generelt</h4>
+          <div class="field">
+            <label class="field-label">Block-navn</label>
+            <input type="text" value="${escapeHtml(block.name || '')}"
+                   oninput="updateBlockField('name', this.value)">
+            <span class="field-hint">Brukes som filnavn ved PNG-eksport: Block-{navn}.png</span>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Kolonner</label>
+              <input type="number" min="6" max="20" value="${block.cols}"
+                     oninput="updateBlockSize('cols', this.value)">
+            </div>
+            <div class="field">
+              <label class="field-label">Rader</label>
+              <input type="number" min="4" max="14" value="${block.rows}"
+                     oninput="updateBlockSize('rows', this.value)">
+            </div>
+          </div>
+        </div>
+
+        <div class="be-section">
+          <h4>Header</h4>
+          <div class="field">
+            <label class="field-label">Tittel (vises i header)</label>
+            <input type="text" value="${escapeHtml(block.header.title || '')}"
+                   oninput="updateBlockHeader('title', this.value)">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Bakgrunn</label>
+              ${renderColorPicker(block.header.bg_color, 'bg_color', 'updateBlockHeader')}
+            </div>
+            <div class="field">
+              <label class="field-label">Tekst</label>
+              ${renderColorPicker(block.header.text_color, 'text_color', 'updateBlockHeader')}
+            </div>
+          </div>
+        </div>
+
+        <div class="be-section">
+          <h4>Innhold</h4>
+          <div class="field">
+            <label class="field-label">Type</label>
+            <select onchange="changeBlockType(this.value)" class="be-type-select">
+              ${Object.entries(BLOCK_TYPES).map(([key, info]) =>
+                `<option value="${key}" ${block.content_type === key ? 'selected' : ''}>${info.icon}  ${info.label}</option>`
+              ).join('')}
+            </select>
+          </div>
+          ${renderBlockContentEditor(block)}
+        </div>
+
+        <div class="be-section">
+          <h4>Footer</h4>
+          <div class="field">
+            <label class="field-label">Tekst (valgfri)</label>
+            <input type="text" value="${escapeHtml(block.footer.text || '')}"
+                   oninput="updateBlockFooter('text', this.value)">
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Bakgrunn</label>
+              ${renderColorPicker(block.footer.bg_color, 'bg_color', 'updateBlockFooter')}
+            </div>
+            <div class="field">
+              <label class="field-label">Tekst</label>
+              ${renderColorPicker(block.footer.text_color, 'text_color', 'updateBlockFooter')}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Høyre: live preview -->
+      <div class="be-right">
+        <h4>Forhåndsvisning</h4>
+        <div class="be-preview-wrap">
+          <div class="be-preview" id="be-preview">${renderBlockPreview(block)}</div>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:10px;line-height:1.4;">
+          Forhåndsvisningen oppdateres mens du redigerer. PNG-eksport skjer ved
+          «Lagre block» og ved scenario-lagring.
+        </div>
+      </div>
     </div>
-    <div class="divider"></div>
-    ${renderTemplateEditor()}
   `;
 }
 
-function updateBlockName(name) {
-  if (!templateBuf) return;
-  templateBuf.name = name;
-  // Live-oppdater modal-tittel
-  const t = $('#modal-title');
-  if (t) t.textContent = 'Block-editor: ' + (name || 'Uten navn');
-  // Live-oppdater block-listen i sidekolonnen (selv om den er skjult bak modal)
+/* En enkel fargevelger med 8 paletter + custom */
+function renderColorPicker(currentValue, field, updateFn) {
+  const palette = [
+    '#1a4a7a', '#2a6b3c', '#b83228', '#b86c00',
+    '#8b3a2a', '#1a1610', '#ede8dc', '#ffffff',
+  ];
+  let html = '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">';
+  for (const c of palette) {
+    const sel = c.toLowerCase() === (currentValue || '').toLowerCase() ? 'border:2px solid var(--ink);' : 'border:1px solid var(--rule);';
+    html += `<button type="button" title="${c}" style="width:22px;height:22px;${sel}background:${c};border-radius:3px;cursor:pointer;padding:0;" onclick="${updateFn}('${field}', '${c}')"></button>`;
+  }
+  html += `<input type="color" value="${currentValue || '#000000'}" oninput="${updateFn}('${field}', this.value)" style="width:34px;height:24px;padding:1px;cursor:pointer;">`;
+  html += '</div>';
+  return html;
+}
+
+function renderBlockContentEditor(block) {
+  const t = block.content_type;
+  const c = block.content || {};
+  if (t === 'mc') return renderContentEditorMC(c);
+  if (t === 'text') return renderContentEditorText(c);
+  if (t === 'order') return renderContentEditorOrder(c);
+  if (t === 'unlock') return renderContentEditorFreeText(c, 'Beskrivelse av boks/lås', 'Tekst som forteller deltagerne hva som skal låses opp');
+  if (t === 'new_clues') return renderContentEditorFreeText(c, 'Hvilke kort skal åpnes', 'Beskriv hvilke ledetråder/kort spillerne nå får tilgang til');
+  if (t === 'place_clues') return renderContentEditorFreeText(c, 'Instruks om plassering', 'Beskriv hva som skal plasseres hvor');
+  return '<div class="muted">Ukjent type</div>';
+}
+
+function renderContentEditorMC(c) {
+  if (!Array.isArray(c.options)) c.options = ['', '', '', ''];
+  while (c.options.length < (c.count || 4)) c.options.push('');
+  const count = c.count || 4;
+  return `
+    <div class="field">
+      <label class="field-label">Spørsmål</label>
+      <textarea rows="2" oninput="updateBlockContent('question', this.value)">${escapeHtml(c.question || '')}</textarea>
+    </div>
+    <div class="field">
+      <label class="field-label">Antall svaralternativer</label>
+      <div class="be-count-switch">
+        ${[2, 3, 4].map(n => `
+          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateBlockContentCount(${n})">${n}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">Svaralternativer (velg riktig)</label>
+      ${[0, 1, 2, 3].slice(0, count).map(i => `
+        <div class="be-option-row ${c.correct_index === i ? 'is-correct' : ''}">
+          <button type="button" class="be-option-letter" onclick="updateBlockContent('correct_index', ${i})" title="Sett som riktig svar">${'ABCD'[i]}</button>
+          <input type="text" value="${escapeHtml(c.options[i] || '')}" placeholder="Svaralternativ ${'ABCD'[i]}"
+                 oninput="updateBlockContentOption(${i}, this.value)">
+          ${c.correct_index === i
+            ? '<span class="be-option-check">✓ Riktig</span>'
+            : `<button type="button" class="btn btn-sm btn-ghost" onclick="updateBlockContent('correct_index', ${i})">Sett riktig</button>`}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderContentEditorText(c) {
+  return `
+    <div class="field">
+      <label class="field-label">Spørsmål</label>
+      <textarea rows="2" oninput="updateBlockContent('question', this.value)">${escapeHtml(c.question || '')}</textarea>
+    </div>
+    <div class="field">
+      <label class="field-label">Fasit-svar</label>
+      <input type="text" value="${escapeHtml(c.correct_answer || '')}" placeholder="Det riktige svaret"
+             oninput="updateBlockContent('correct_answer', this.value)">
+      <span class="field-hint">Brukes for validering når spille-flyten er implementert. Sammenligning er case-insensitive.</span>
+    </div>
+  `;
+}
+
+function renderContentEditorOrder(c) {
+  if (!Array.isArray(c.options)) c.options = ['', '', '', ''];
+  while (c.options.length < (c.count || 4)) c.options.push('');
+  const count = c.count || 4;
+  return `
+    <div class="field">
+      <label class="field-label">Instruks</label>
+      <textarea rows="2" oninput="updateBlockContent('instruction', this.value)">${escapeHtml(c.instruction || '')}</textarea>
+      <span class="field-hint">F.eks. «Sett hendelsene i riktig kronologisk rekkefølge»</span>
+    </div>
+    <div class="field">
+      <label class="field-label">Antall alternativer</label>
+      <div class="be-count-switch">
+        ${[2, 3, 4].map(n => `
+          <button type="button" class="be-count-btn ${count === n ? 'active' : ''}" onclick="updateBlockContentCount(${n})">${n}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">Alternativer (skriv inn i RIKTIG rekkefølge — vises stokket for spilleren senere)</label>
+      ${[0, 1, 2, 3].slice(0, count).map(i => `
+        <div class="be-option-row">
+          <span class="be-option-letter">${i + 1}</span>
+          <input type="text" value="${escapeHtml(c.options[i] || '')}" placeholder="Steg ${i + 1}"
+                 oninput="updateBlockContentOption(${i}, this.value)">
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderContentEditorFreeText(c, label, hint) {
+  return `
+    <div class="field">
+      <label class="field-label">${escapeHtml(label)}</label>
+      <textarea rows="4" oninput="updateBlockContent('text', this.value)">${escapeHtml(c.text || '')}</textarea>
+      <span class="field-hint">${escapeHtml(hint)}</span>
+    </div>
+    <div class="field">
+      <label class="field-label">Fasit-svar (valgfritt)</label>
+      <input type="text" value="${escapeHtml(c.correct_answer || '')}" placeholder="Valgfritt — brukes hvis spilleren skal taste inn et svar"
+             oninput="updateBlockContent('correct_answer', this.value)">
+      <span class="field-hint">Lar deg knytte et fasit-svar til denne blokken for senere validering.</span>
+    </div>
+  `;
+}
+
+/* ─── UPDATE HELPERS ───────────────────────────────────── */
+function updateBlockField(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b[field] = value;
+  if (field === 'name') {
+    const t = $('#modal-title');
+    if (t) t.textContent = 'Block-editor: ' + (value || 'Uten navn');
+    renderBlockList();
+  }
+  refreshBlockPreview();
+}
+
+function updateBlockSize(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  const n = parseInt(value, 10);
+  if (isNaN(n) || n < 4) return;
+  b[field] = n;
+  refreshBlockPreview();
+}
+
+function updateBlockHeader(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b.header[field] = value;
+  refreshBlockPreview();
+  // Bare re-render hele editoren ved fargevalg (slik at palette-knappens 
+  // selected-state oppdateres). Tekstinput skal IKKE trigge refresh —
+  // det ville miste cursor-fokus.
+  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
+}
+
+function updateBlockFooter(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  b.footer[field] = value;
+  refreshBlockPreview();
+  if (field === 'bg_color' || field === 'text_color') refreshBlockEditor();
+}
+
+function updateBlockContent(field, value) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  if (!b.content) b.content = {};
+  b.content[field] = value;
+  if (field === 'correct_index') refreshBlockEditor();
+  else refreshBlockPreview();
+}
+
+function updateBlockContentOption(idx, value) {
+  const b = currentEditingBlock();
+  if (!b || !b.content) return;
+  if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
+  b.content.options[idx] = value;
+  refreshBlockPreview();
+}
+
+function updateBlockContentCount(n) {
+  const b = currentEditingBlock();
+  if (!b || !b.content) return;
+  b.content.count = n;
+  if (!Array.isArray(b.content.options)) b.content.options = ['', '', '', ''];
+  while (b.content.options.length < n) b.content.options.push('');
+  // Hvis correct_index er utenfor nye count, juster
+  if (b.content.correct_index !== undefined && b.content.correct_index >= n) {
+    b.content.correct_index = 0;
+  }
+  refreshBlockEditor();
+}
+
+function changeBlockType(newType) {
+  const b = currentEditingBlock();
+  if (!b) return;
+  // Bevar tekst hvis det gir mening
+  const oldText = b.content?.text || b.content?.question || b.content?.instruction || '';
+  b.content_type = newType;
+  b.content = defaultBlockContent(newType);
+  // Forsøk å bevare tekst
+  if ('text' in b.content) b.content.text = oldText;
+  else if ('question' in b.content) b.content.question = oldText;
+  else if ('instruction' in b.content) b.content.instruction = oldText;
+  refreshBlockEditor();
   renderBlockList();
 }
 
-/* Start trigger-pick-modus:
-   1. Lagre blokken først (slik at endringer i navn/innhold ikke forsvinner
-      når vi laster scenariet på nytt for å bytte til board-fanen)
-   2. Sett pickMode=true, men HOLD activeBlockId
-   3. Lukk modal og åpne scenario-editor på board-fanen
-   4. Vis en flytende kontroll-pin som lar brukeren avslutte pick-modus
-      eller åpne blocken igjen.
-*/
+function refreshBlockEditor() {
+  const body = $('#modal-body');
+  if (body) body.innerHTML = renderBlockEditorBody();
+}
+
+function refreshBlockPreview() {
+  const b = currentEditingBlock();
+  const el = $('#be-preview');
+  if (el && b) el.innerHTML = renderBlockPreview(b);
+}
+
+/* ─── PREVIEW (HTML for live editor-visning) ──────────── */
+function renderBlockPreview(block) {
+  // Forhåndsvisningen viser SAMME HTML som PNG-renderingen,
+  // bare i mindre skala. Vi bruker en grov skalering basert på
+  // antall ruter — 50 px per rute er passe for editor-preview.
+  const cellPx = 50;
+  const W = block.cols * cellPx;
+  const H = block.rows * cellPx;
+  const headerRows = block.header.rows || 1;
+  const footerRows = block.footer.rows || 1;
+  const headerH = headerRows * cellPx;
+  const footerH = footerRows * cellPx;
+  const contentH = H - headerH - footerH;
+
+  let html = `<div class="be-preview-card" style="width:${W}px;height:${H}px;background:#fff;">`;
+
+  // Header
+  html += `<div class="be-prev-header" style="height:${headerH}px;background:${block.header.bg_color};color:${block.header.text_color};">
+    <span class="be-prev-header-title">${escapeHtml(block.header.title || '')}</span>
+  </div>`;
+
+  // Content
+  html += `<div class="be-prev-content" style="height:${contentH}px;background:#faf8f3;">`;
+  html += renderBlockContentPreview(block);
+  html += `</div>`;
+
+  // Footer
+  html += `<div class="be-prev-footer" style="height:${footerH}px;background:${block.footer.bg_color};color:${block.footer.text_color};">
+    <span class="be-prev-footer-text">${escapeHtml(block.footer.text || '')}</span>
+  </div>`;
+
+  html += `</div>`;
+  return html;
+}
+
+function renderBlockContentPreview(block) {
+  const c = block.content || {};
+  const t = block.content_type;
+  if (t === 'mc') {
+    const count = c.count || 4;
+    let html = `<div class="be-prev-question">${escapeHtml(c.question || '(spørsmål)')}</div>`;
+    html += '<div class="be-prev-options">';
+    for (let i = 0; i < count; i++) {
+      const isCorrect = c.correct_index === i;
+      html += `<div class="be-prev-option ${isCorrect ? 'is-correct' : ''}">
+        <span class="be-prev-option-letter">${'ABCD'[i]}</span>
+        <span>${escapeHtml(c.options?.[i] || `(alternativ ${'ABCD'[i]})`)}</span>
+        ${isCorrect ? '<span class="be-prev-check">✓</span>' : ''}
+      </div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+  if (t === 'text') {
+    return `
+      <div class="be-prev-question">${escapeHtml(c.question || '(spørsmål)')}</div>
+      <div class="be-prev-input-line">Svar: ____________________________</div>
+      ${c.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(c.correct_answer)}</div>` : ''}
+    `;
+  }
+  if (t === 'order') {
+    const count = c.count || 4;
+    let html = `<div class="be-prev-question">${escapeHtml(c.instruction || '(instruks)')}</div>`;
+    html += '<div class="be-prev-options">';
+    for (let i = 0; i < count; i++) {
+      html += `<div class="be-prev-option">
+        <span class="be-prev-option-letter">${i + 1}</span>
+        <span>${escapeHtml(c.options?.[i] || `(steg ${i + 1})`)}</span>
+      </div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+  // Unlock / new_clues / place_clues
+  return `
+    <div class="be-prev-text">${escapeHtml(c.text || `(${BLOCK_TYPES[t]?.label || 'innhold'})`)}</div>
+    ${c.correct_answer ? `<div class="be-prev-fasit">Fasit: ${escapeHtml(c.correct_answer)}</div>` : ''}
+  `;
+}
+
+/* ─── TRIGGER PICK (uendret fra forrige iter) ──────────── */
 async function startTriggerPick() {
   if (!blockEditorState.activeBlockId) return;
   if (!state.currentScenarioId) return;
 
   try {
-    // Lagre block først (PNG + scenario_data) slik at endringer ikke mistes
-    if (templateBuf) {
+    const block = currentEditingBlock();
+    if (block) {
       showToast('Lagrer block...', 'info', 1500);
-      try { await exportBlockPng(templateBuf); } catch (e) { console.warn('Block PNG-eksport feilet:', e.message); }
+      try { await exportBlockPng(block); } catch (e) { console.warn('Block PNG-eksport feilet:', e.message); }
       await api(`/api/scenarios/${state.currentScenarioId}`, {
         method: 'PATCH',
         body: { scenario_data: scenarioBuf.scenario_data },
@@ -4495,38 +4904,23 @@ async function startTriggerPick() {
     return;
   }
 
-  // pickMode aktiveres FØR vi lukker editor, slik at onclick-handlers vet
-  // at vi er i pick-modus så snart modal er borte.
   blockEditorState.pickMode = true;
-
-  // Lukk modal og åpne scenario-editor på board-fanen
-  templateBuf = null;
-  templateSelectedZone = null;
-  templateSelectedLayer = -1;
-  templateDrag = null;
   closeModal();
 
-  // openScenarioEditor laster scenariet på nytt. Det er OK fordi vi nettopp
-  // har lagret. Men den setter activeScTab='meta' — vi setter til 'board'
-  // i en wrapper.
   await openScenarioEditor(state.currentScenarioId);
   activeScTab = 'board';
-  // Tving tab-bytte etter at editor er åpen
   setTimeout(() => {
     if (typeof switchScTab === 'function') switchScTab('board');
     showTriggerPickPin();
   }, 50);
 }
 
-/* Avslutt pick-modus uten å åpne block-editor igjen */
 function endTriggerPick() {
   blockEditorState.pickMode = false;
   hideTriggerPickPin();
   renderBoard();
 }
 
-/* Åpne block-editor igjen (avslutter også pick-modus implisitt
-   siden openBlockEditor setter pickMode=false). */
 function reopenActiveBlockEditor() {
   const id = blockEditorState.activeBlockId;
   if (!id) {
@@ -4565,10 +4959,6 @@ function hideTriggerPickPin() {
   if (pin) pin.style.display = 'none';
 }
 
-/* Live-rendret oversikt over triggers på en block.
-   Slår opp navn/koordinat-info fra scenarioBuf slik at endringer i
-   kort-navn eller koord-X,Y automatisk reflekteres her ved neste render.
-*/
 function renderBlockTriggerSummary(block) {
   if (!block) return '';
   const cards = scenarioBuf.scenario_data.physical_cards || [];
@@ -4577,8 +4967,7 @@ function renderBlockTriggerSummary(block) {
   const cardItems = (block.triggered_by_cards || []).map(cardId => {
     const card = cards.find(c => c.id === cardId);
     if (!card) {
-      return `<span class="bt-chip bt-chip-missing">
-                ⃞ Mangler kort (${escapeHtml(cardId)})
+      return `<span class="bt-chip bt-chip-missing">⃞ Mangler kort
                 <button class="bt-chip-x" onclick="removeBlockTriggerCard('${cardId}')">✕</button>
               </span>`;
     }
@@ -4593,8 +4982,7 @@ function renderBlockTriggerSummary(block) {
   const coordItems = (block.triggered_by_coords || []).map(coordId => {
     const coord = coords.find(c => c.id === coordId);
     if (!coord) {
-      return `<span class="bt-chip bt-chip-missing">
-                ⊕ Mangler koord (${escapeHtml(coordId)})
+      return `<span class="bt-chip bt-chip-missing">⊕ Mangler koord
                 <button class="bt-chip-x" onclick="removeBlockTriggerCoord('${coordId}')">✕</button>
               </span>`;
     }
@@ -4607,7 +4995,7 @@ function renderBlockTriggerSummary(block) {
 
   const all = [...cardItems, ...coordItems];
   if (all.length === 0) {
-    return '<div class="muted" style="font-style:italic;padding:6px 0;font-size:12px;">Ingen triggere ennå. Aktiver «Velg triggere» og klikk på kort eller koord-celler i boardet.</div>';
+    return '<div class="muted" style="font-style:italic;padding:6px 0;font-size:12px;">Ingen triggere ennå. Klikk «Velg triggere på board» og deretter på kort eller koord-celler.</div>';
   }
   return `<div class="bt-chip-list">${all.join('')}</div>`;
 }
@@ -4630,19 +5018,12 @@ function removeBlockTriggerCoord(coordId) {
   renderBlockList();
 }
 
-function currentEditingBlock() {
-  const id = blockEditorState.activeBlockId;
-  if (!id) return null;
-  return scenarioBuf.scenario_data.blocks.find(b => b.id === id);
-}
-
 function refreshBlockTriggerSummary() {
   const block = currentEditingBlock();
   const el = $('#block-trigger-summary');
   if (el && block) el.innerHTML = renderBlockTriggerSummary(block);
 }
 
-/* Toggle trigger fra utenfor block-editoren (kalles fra board click) */
 function toggleBlockTriggerForCard(cardId) {
   const block = currentEditingBlock();
   if (!block || !blockEditorState.pickMode) return false;
@@ -4653,7 +5034,6 @@ function toggleBlockTriggerForCard(cardId) {
   refreshBlockTriggerSummary();
   renderBoard();
   renderBlockList();
-  // Oppdater pin-counter hvis den er synlig
   if ($('#block-pick-pin')?.style.display !== 'none') showTriggerPickPin();
   return true;
 }
@@ -4668,28 +5048,27 @@ function toggleBlockTriggerForCoord(coordId) {
   refreshBlockTriggerSummary();
   renderBoard();
   renderBlockList();
-  // Oppdater pin-counter hvis den er synlig
   if ($('#block-pick-pin')?.style.display !== 'none') showTriggerPickPin();
   return true;
 }
 
-/* Sjekk om en gitt celle (x,y) har en koord — returner coord-id eller null */
 function coordIdAtCell(x, y) {
   const coords = scenarioBuf.scenario_data.coordinates || [];
   const c = coords.find(c => c.x === x && c.y === y);
   return c ? c.id : null;
 }
 
-/* ─── BLOCK LAGRING ──────────────────────────────────── */
+/* ─── LAGRING ──────────────────────────────────────────── */
 async function saveBlockOnly() {
   if (!state.currentScenarioId) {
     showToast('Ingen scenario åpen', 'error');
     return;
   }
-  if (!templateBuf) return;
+  const block = currentEditingBlock();
+  if (!block) return;
   try {
     showToast('Lagrer block og genererer PNG...', 'info');
-    await exportBlockPng(templateBuf);
+    await exportBlockPng(block);
     await api(`/api/scenarios/${state.currentScenarioId}`, {
       method: 'PATCH',
       body: { scenario_data: scenarioBuf.scenario_data },
@@ -4701,17 +5080,190 @@ async function saveBlockOnly() {
   }
 }
 
-/* PNG-eksport av en block — samme mønster som exportCardPng,
-   men med kind='blocks' og eget filnavn-prefix.
+/* ─── PNG-EKSPORT ──────────────────────────────────────── */
+const BLOCK_EXPORT_PX_PER_CELL = 120;
+const BLOCK_THUMB_PX_PER_CELL = 30;
+
+/* Bygger ren SVG for en block som kan konverteres til PNG.
+   Layout speiler renderBlockPreview, men i SVG-form og høyere
+   oppløsning.
 */
+function renderBlockForExport(block) {
+  ensureBlockShape(block);
+  const cell = BLOCK_EXPORT_PX_PER_CELL;
+  const W = block.cols * cell;
+  const H = block.rows * cell;
+  const headerRows = block.header.rows || 1;
+  const footerRows = block.footer.rows || 1;
+  const headerH = headerRows * cell;
+  const footerH = footerRows * cell;
+  const contentY = headerH;
+  const contentH = H - headerH - footerH;
+  const footerY = H - footerH;
+
+  // ASCII-safe escape for SVG-tekst
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  svg += `<rect width="${W}" height="${H}" fill="#fff"/>`;
+
+  // ─── Header ──────────────────────────────────────────
+  svg += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${block.header.bg_color}"/>`;
+  const titleFz = Math.min(headerH * 0.55, 48);
+  svg += `<text x="${W / 2}" y="${headerH / 2}" text-anchor="middle" dominant-baseline="middle"
+            font-family="Libre Baskerville, Georgia, serif" font-size="${titleFz}" font-weight="700"
+            fill="${block.header.text_color}">${esc(block.header.title || '')}</text>`;
+
+  // ─── Content ─────────────────────────────────────────
+  svg += `<rect x="0" y="${contentY}" width="${W}" height="${contentH}" fill="#faf8f3"/>`;
+  svg += renderBlockContentSVG(block, 0, contentY, W, contentH, esc);
+
+  // ─── Footer ──────────────────────────────────────────
+  svg += `<rect x="0" y="${footerY}" width="${W}" height="${footerH}" fill="${block.footer.bg_color}"/>`;
+  if (block.footer.text) {
+    const footerFz = Math.min(footerH * 0.45, 32);
+    svg += `<text x="${W * 0.04}" y="${footerY + footerH / 2}" dominant-baseline="middle"
+              font-family="Barlow Condensed, sans-serif" font-size="${footerFz}"
+              fill="${block.footer.text_color}">${esc(block.footer.text)}</text>`;
+  }
+
+  svg += `</svg>`;
+  return svg;
+}
+
+function renderBlockContentSVG(block, x, y, w, h, esc) {
+  const c = block.content || {};
+  const t = block.content_type;
+  const pad = w * 0.04;
+  const cx = x + pad;
+  const cw = w - 2 * pad;
+  let s = '';
+
+  if (t === 'mc') {
+    const count = c.count || 4;
+    const qFz = Math.min(h * 0.10, 42);
+    const optFz = Math.min(h * 0.08, 32);
+    const qY = y + h * 0.12;
+    s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
+            font-weight="700" fill="#1a1610">${wrapSvgText(c.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
+    const optStartY = y + h * 0.30;
+    const rowH = (h * 0.65) / count;
+    for (let i = 0; i < count; i++) {
+      const isCorrect = c.correct_index === i;
+      const rowY = optStartY + i * rowH;
+      const bgFill = isCorrect ? '#2a6b3c' : '#ede8dc';
+      const fg = isCorrect ? '#ffffff' : '#1a1610';
+      s += `<rect x="${cx}" y="${rowY}" width="${cw}" height="${rowH * 0.85}" rx="3" fill="${bgFill}"/>`;
+      s += `<circle cx="${cx + rowH * 0.5}" cy="${rowY + rowH * 0.425}" r="${rowH * 0.32}" fill="#fff" stroke="${fg}" stroke-width="2"/>`;
+      s += `<text x="${cx + rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
+              font-family="Barlow Condensed" font-size="${optFz}" font-weight="700" fill="${fg}">${'ABCD'[i]}</text>`;
+      s += `<text x="${cx + rowH * 1.15}" y="${rowY + rowH * 0.425}" dominant-baseline="middle"
+              font-family="Barlow Condensed" font-size="${optFz}" fill="${fg}">${esc(c.options?.[i] || '')}</text>`;
+      if (isCorrect) {
+        s += `<text x="${cx + cw - rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
+                font-family="Barlow Condensed" font-size="${optFz * 1.2}" font-weight="700" fill="#fff">✓</text>`;
+      }
+    }
+    return s;
+  }
+
+  if (t === 'text') {
+    const qFz = Math.min(h * 0.11, 44);
+    const inputFz = Math.min(h * 0.10, 36);
+    const fasitFz = Math.min(h * 0.07, 24);
+    const qY = y + h * 0.15;
+    s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
+            font-weight="700" fill="#1a1610">${wrapSvgText(c.question || '(spørsmål)', cw, qFz, esc, cx)}</text>`;
+    const lineY = y + h * 0.55;
+    s += `<text x="${cx}" y="${lineY}" font-family="Barlow Condensed" font-size="${inputFz}" fill="#6b6050">Svar:</text>`;
+    s += `<line x1="${cx + inputFz * 2.5}" y1="${lineY + 4}" x2="${cx + cw - 10}" y2="${lineY + 4}"
+            stroke="#3d3628" stroke-width="2"/>`;
+    if (c.correct_answer) {
+      const fY = y + h * 0.85;
+      s += `<text x="${cx}" y="${fY}" font-family="Barlow Condensed" font-size="${fasitFz}"
+              font-style="italic" fill="#2a6b3c">Fasit: ${esc(c.correct_answer)}</text>`;
+    }
+    return s;
+  }
+
+  if (t === 'order') {
+    const count = c.count || 4;
+    const qFz = Math.min(h * 0.10, 38);
+    const optFz = Math.min(h * 0.08, 30);
+    const qY = y + h * 0.12;
+    s += `<text x="${cx}" y="${qY}" font-family="Libre Baskerville, Georgia, serif" font-size="${qFz}"
+            font-weight="700" fill="#1a1610">${wrapSvgText(c.instruction || '(instruks)', cw, qFz, esc, cx)}</text>`;
+    const optStartY = y + h * 0.30;
+    const rowH = (h * 0.65) / count;
+    for (let i = 0; i < count; i++) {
+      const rowY = optStartY + i * rowH;
+      s += `<rect x="${cx}" y="${rowY}" width="${cw}" height="${rowH * 0.85}" rx="3" fill="#ede8dc"/>`;
+      s += `<circle cx="${cx + rowH * 0.5}" cy="${rowY + rowH * 0.425}" r="${rowH * 0.32}" fill="#c8961a"/>`;
+      s += `<text x="${cx + rowH * 0.5}" y="${rowY + rowH * 0.425}" text-anchor="middle" dominant-baseline="middle"
+              font-family="Barlow Condensed" font-size="${optFz}" font-weight="700" fill="#fff">${i + 1}</text>`;
+      s += `<text x="${cx + rowH * 1.15}" y="${rowY + rowH * 0.425}" dominant-baseline="middle"
+              font-family="Barlow Condensed" font-size="${optFz}" fill="#1a1610">${esc(c.options?.[i] || '')}</text>`;
+    }
+    return s;
+  }
+
+  // Unlock / new_clues / place_clues
+  const tFz = Math.min(h * 0.10, 38);
+  const fasitFz = Math.min(h * 0.07, 24);
+  const topY = y + h * 0.18;
+  const lines = wrapTextLines(c.text || `(${BLOCK_TYPES[t]?.label || 'innhold'})`, Math.floor(cw / (tFz * 0.5)));
+  lines.slice(0, 5).forEach((line, i) => {
+    s += `<text x="${cx}" y="${topY + i * tFz * 1.3}" font-family="Libre Baskerville, Georgia, serif"
+            font-size="${tFz}" fill="#1a1610">${esc(line)}</text>`;
+  });
+  if (c.correct_answer) {
+    s += `<text x="${cx}" y="${y + h - h * 0.10}" font-family="Barlow Condensed" font-size="${fasitFz}"
+            font-style="italic" fill="#2a6b3c">Fasit: ${esc(c.correct_answer)}</text>`;
+  }
+  return s;
+}
+
+// Veldig enkel tekst-wrapping for SVG (return en flat <tspan>-streng).
+// Trenger x-koordinat fordi tspan starter på 0 ellers, ikke der text er.
+function wrapSvgText(text, maxW, fontSize, esc, anchorX = 0) {
+  const charW = fontSize * 0.5;
+  const maxChars = Math.floor(maxW / charW);
+  const lines = wrapTextLines(text, maxChars);
+  return lines.map((l, i) =>
+    `<tspan x="${anchorX}" dy="${i === 0 ? 0 : fontSize * 1.2}">${esc(l)}</tspan>`
+  ).join('');
+}
+
+function wrapTextLines(text, maxChars) {
+  if (!text) return [''];
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + ' ' + w).trim().length > maxChars) {
+      if (cur) lines.push(cur);
+      cur = w;
+    } else {
+      cur = (cur + ' ' + w).trim();
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
+
 async function exportBlockPng(block) {
   if (!block || !state.currentScenarioId) return null;
   try {
-    const W = (block.cols || 5) * CARD_EXPORT_PX_PER_CELL;
-    const H = (block.rows || 7) * CARD_EXPORT_PX_PER_CELL;
-    const tW = (block.cols || 5) * CARD_THUMB_PX_PER_CELL;
-    const tH = (block.rows || 7) * CARD_THUMB_PX_PER_CELL;
-    const svg = renderTemplateCardForExport(block);
+    ensureBlockShape(block);
+    const W = block.cols * BLOCK_EXPORT_PX_PER_CELL;
+    const H = block.rows * BLOCK_EXPORT_PX_PER_CELL;
+    const tW = block.cols * BLOCK_THUMB_PX_PER_CELL;
+    const tH = block.rows * BLOCK_THUMB_PX_PER_CELL;
+    const svg = renderBlockForExport(block);
     const [fullBlob, thumbBlob] = await Promise.all([
       svgToPngBlob(svg, W, H, '#ffffff'),
       svgToPngBlob(svg, tW, tH, '#ffffff'),
