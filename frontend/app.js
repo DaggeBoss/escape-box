@@ -4330,14 +4330,33 @@ function defaultItem(type) {
 
 // Hvor mye relativ plass hver type trenger i PNG-content-området.
 // Brukes for å auto-foreslå rows og fordele content-høyde i PNG.
-function itemWeight(type) {
+function itemWeight(typeOrItem) {
+  // Bakoverkompatibel: tar både en streng (type) eller hele item-objektet.
+  const type = typeof typeOrItem === 'string' ? typeOrItem : typeOrItem?.type;
+  const item = typeof typeOrItem === 'object' ? typeOrItem : null;
+
   switch (type) {
     case 'mc':         return 2.4;  // spørsmål + 2-4 svaralternativer
     case 'order':      return 2.4;  // instruks + 2-4 alternativer
     case 'text':       return 1.4;  // spørsmål + svar-linje
-    case 'unlock':     return 1.2;  // fritekst
-    case 'new_clues':  return 1.2;
-    case 'place_clues':return 1.2;
+    case 'unlock':
+    case 'new_clues':
+    case 'place_clues': {
+      // Tekstbaserte items: vokser med tekstlengde slik at lang tekst
+      // får tilstrekkelig plass i blocken og PNG-eksporten.
+      // Base 1.2 dekker ~2 linjer; hver ekstra linje legger til ~0.3.
+      const base = 1.2;
+      if (!item) return base;
+      const text = String(item.text || '');
+      if (!text.trim()) return base;
+      // Estimer linjer: ~40 tegn per linje + eksplisitte linjeskift teller alltid
+      const explicitLines = (text.match(/\r?\n/g) || []).length + 1;
+      const charLines = Math.ceil(text.length / 40);
+      const estLines = Math.max(explicitLines, charLines);
+      // 2 linjer ≈ base, deretter 0.3 per ekstra linje, cap på 6.0 (≈ 18 linjer)
+      const extra = Math.max(0, estLines - 2) * 0.3;
+      return Math.min(base + extra, 6.0);
+    }
     default:           return 1.4;
   }
 }
@@ -4347,7 +4366,10 @@ function computeMinRows(items) {
   // Header (1) + footer (1) + content. Hver weight-enhet = 1 rad.
   const headerRows = 1;
   const footerRows = 1;
-  const totalWeight = items.reduce((sum, it) => sum + itemWeight(it.type), 0);
+  // Sender hele item-objektet (ikke bare type) slik at tekstbaserte items
+  // får vekt som vokser med tekstlengden — block-en vokser dermed til å
+  // romme all teksten i PNG-eksporten.
+  const totalWeight = items.reduce((sum, it) => sum + itemWeight(it), 0);
   // Minimum 1 weight-enhet for content selv om tom
   const contentRows = Math.max(5, Math.ceil(totalWeight * 1.4));
   return headerRows + footerRows + contentRows;
@@ -4883,6 +4905,13 @@ function updateItemField(itemId, field, value) {
   const it = (b.items || []).find(x => x.id === itemId);
   if (!it) return;
   it[field] = value;
+  // Tekst-felter kan endre nødvendig høyde (for tekstbaserte items vokser
+  // vekten med tekstlengden) — auto-juster slik at PNG-eksporten får plass
+  // til all teksten. Endrer kun b.rows (et tall) — det re-rendrer ikke
+  // editor-feltene, så textarea-fokus bevares.
+  if (field === 'text' || field === 'question' || field === 'instruction') {
+    autoAdjustBlockRows(b);
+  }
   // correct_index krever full re-render (radio-tilstand)
   if (field === 'correct_index') refreshItemsList();
   else refreshBlockPreview();
@@ -5454,12 +5483,30 @@ function renderItemSVG(item, x, y, w, h, esc) {
     return s;
   }
 
-  // Unlock / new_clues / place_clues
-  const tFz = Math.min(h * 0.18, 30);
+  // Unlock / new_clues / place_clues — adaptiv tekst som tar med ALLE linjer
+  const fallbackText = item.text || `(${BLOCK_ITEM_TYPES[t]?.label || 'innhold'})`;
+  const topY = y + h * 0.18;
+  const bottomReserve = item.correct_answer ? h * 0.18 : h * 0.06;
+  const availH = h - (topY - y) - bottomReserve;
+
+  // Start med ønsket fontstørrelse og reduser til all teksten får plass.
+  // 4 = absolutt minimum vi viser med — under det blir det uleselig på PNG.
+  let tFz = Math.min(h * 0.18, 30);
+  const MIN_FZ = 11;
+  let lines = [];
+  for (let iter = 0; iter < 10; iter++) {
+    const charW = tFz * 0.5;
+    const maxChars = Math.max(8, Math.floor(cw / charW));
+    lines = wrapTextLines(fallbackText, maxChars);
+    const totalH = lines.length * tFz * 1.3;
+    if (totalH <= availH || tFz <= MIN_FZ) break;
+    // Skaler font ned proporsjonalt med overskytende, men minst med 15%
+    const ratio = Math.min(0.85, availH / totalH);
+    tFz = Math.max(MIN_FZ, Math.floor(tFz * ratio));
+  }
+
   const fasitFz = Math.min(h * 0.12, 20);
-  const topY = y + h * 0.25;
-  const lines = wrapTextLines(item.text || `(${BLOCK_ITEM_TYPES[t]?.label || 'innhold'})`, Math.floor(cw / (tFz * 0.5)));
-  lines.slice(0, 4).forEach((line, i) => {
+  lines.forEach((line, i) => {
     s += `<text x="${cx}" y="${topY + i * tFz * 1.3}" font-family="Libre Baskerville, Georgia, serif"
             font-size="${tFz}" fill="#1a1610">${esc(line)}</text>`;
   });
@@ -5483,18 +5530,41 @@ function wrapSvgText(text, maxW, fontSize, esc, anchorX = 0) {
 
 function wrapTextLines(text, maxChars) {
   if (!text) return [''];
-  const words = String(text).split(/\s+/);
+  if (maxChars < 1) maxChars = 1;
+
+  // Splitt på linjeskift først slik at brukerens egne linjeskift bevares
+  // (\n eller \r\n fra textarea-input).
+  const paragraphs = String(text).split(/\r?\n/);
   const lines = [];
-  let cur = '';
-  for (const w of words) {
-    if ((cur + ' ' + w).trim().length > maxChars) {
-      if (cur) lines.push(cur);
-      cur = w;
-    } else {
-      cur = (cur + ' ' + w).trim();
+
+  for (const paragraph of paragraphs) {
+    if (!paragraph.trim()) {
+      lines.push('');
+      continue;
     }
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let cur = '';
+    for (let w of words) {
+      // Hvis et enkelt ord er lengre enn maxChars (lange URL-er, kode etc),
+      // bryt det opp i flere biter slik at det ikke renner over kanten.
+      while (w.length > maxChars) {
+        if (cur) {
+          lines.push(cur);
+          cur = '';
+        }
+        lines.push(w.slice(0, maxChars));
+        w = w.slice(maxChars);
+      }
+      if ((cur + ' ' + w).trim().length > maxChars) {
+        if (cur) lines.push(cur);
+        cur = w;
+      } else {
+        cur = (cur + ' ' + w).trim();
+      }
+    }
+    if (cur) lines.push(cur);
   }
-  if (cur) lines.push(cur);
+
   return lines.length ? lines : [''];
 }
 
