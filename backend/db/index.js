@@ -12,6 +12,27 @@ pool.on('error', (err) => {
   console.error('PostgreSQL pool error:', err);
 });
 
+// ─── Default scenario_data-struktur ────────────────────────
+// Erstatter det gamle koordinat/grid/anker-baserte systemet.
+// Spillet drives nå av passord (4-sifret kode) som hver kan trigge
+// poeng + kort + minispill + filer i en fiktiv server. Se README for
+// full spesifikasjon.
+const DEFAULT_SCENARIO_DATA = {
+  passwords: [],
+  cards: [],
+  minigames: [],
+  fictional_server: {
+    name: 'Server',
+    folders: [],
+  },
+  settings: {
+    time_limit_enabled: true,
+    show_score: true,
+    require_consent: true,
+    streetview_enabled: true,
+  },
+};
+
 // Idempotente migrasjoner i individuelle try/catch (samme mønster som BME Portal)
 async function initDatabase() {
   console.log('🔧 Initialiserer database...');
@@ -29,7 +50,10 @@ async function initDatabase() {
     console.log('  ✓ organizations');
   } catch (e) { console.error('  ✗ organizations:', e.message); }
 
-  // Users (alle brukere — superadmin, org_admin, gamemaster, participant)
+  // Users (alle admin-brukere — superadmin, org_admin, gamemaster)
+  // 'participant'-rollen i constraint beholdes inntil videre for
+  // bakoverkompatibilitet; nye deltagere lagres i participants-tabellen
+  // (kommer i sesjon 4) — ikke i users.
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -63,11 +87,50 @@ async function initDatabase() {
     console.log('  ✓ scenarios');
   } catch (e) { console.error('  ✗ scenarios:', e.message); }
 
-  // Utvid scenarios med scenario_data (JSONB med koordinater + innstillinger)
+  // Utvid scenarios med scenario_data (JSONB med passord/kort/minispill/server)
   try {
-    await pool.query(`ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS scenario_data JSONB DEFAULT '{"coordinates":[],"settings":{}}'::jsonb`);
+    await pool.query(`
+      ALTER TABLE scenarios
+      ADD COLUMN IF NOT EXISTS scenario_data JSONB
+      DEFAULT '${JSON.stringify(DEFAULT_SCENARIO_DATA)}'::jsonb
+    `);
     console.log('  ✓ scenarios.scenario_data');
   } catch (e) { console.error('  ✗ scenarios alter:', e.message); }
+
+  // Migrasjon: konverter gamle scenario_data (koordinat-basert) til nytt
+  // skjema. Vi sjekker etter scenarios som har 'coordinates'-felt (gammel
+  // struktur) og setter dem til ny default. Eksisterende data går tapt —
+  // dette er avtalt i sesjon 1-planleggingen.
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, scenario_data FROM scenarios
+      WHERE scenario_data ? 'coordinates'
+         OR scenario_data ? 'grid'
+         OR scenario_data ? 'cards_template'
+         OR NOT (scenario_data ? 'passwords')
+    `);
+    if (rows.length > 0) {
+      console.log(`  ⟳ Migrerer ${rows.length} scenario(er) til nytt skjema...`);
+      for (const row of rows) {
+        // Bevar evt. eksisterende settings hvis kompatible
+        const oldSettings = row.scenario_data?.settings || {};
+        const newData = {
+          ...DEFAULT_SCENARIO_DATA,
+          settings: {
+            ...DEFAULT_SCENARIO_DATA.settings,
+            // Bare overfør innstillinger som finnes i nytt skjema
+            time_limit_enabled: oldSettings.time_limit_enabled !== false,
+            show_score: oldSettings.show_score !== false,
+          },
+        };
+        await pool.query(
+          'UPDATE scenarios SET scenario_data = $1 WHERE id = $2',
+          [JSON.stringify(newData), row.id]
+        );
+      }
+      console.log(`  ✓ ${rows.length} scenario(er) migrert`);
+    }
+  } catch (e) { console.error('  ✗ scenario-migrasjon:', e.message); }
 
   // Events (en bedrift kjører et event basert på et scenario)
   try {
@@ -172,4 +235,4 @@ async function initDatabase() {
   console.log('✅ Database klar');
 }
 
-module.exports = { pool, initDatabase };
+module.exports = { pool, initDatabase, DEFAULT_SCENARIO_DATA };

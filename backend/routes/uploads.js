@@ -15,9 +15,6 @@ const router = express.Router();
 
 // ─── Multer (in-memory) ────────────────────────────────────
 // Bilder cap'es på 10 MB. Større blir avvist før de når Dropbox.
-// Vi bruker memoryStorage fordi bildene allerede er komprimert i frontend
-// før opplasting (typisk ender på <500KB) — ingen grunn til å skrive til
-// disk.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -29,14 +26,17 @@ const upload = multer({
   },
 });
 
-const VALID_KINDS = ['coords', 'cards', 'backgrounds', 'originals', 'blocks'];
+// Etter at grid/koordinatsystemet er fjernet er disse de eneste gyldige
+// bilde-typene. 'cards' brukes for kort-bilder i passord-triggere.
+// 'minigames' er reservert for ikoner/thumbnails per minispill (sesjon 3).
+const VALID_KINDS = ['cards', 'minigames'];
 
 // ─── POST /api/uploads/image ───────────────────────────────
 // multipart/form-data:
 //   - file: hovedbildet (komprimert, max ~1600px)
 //   - thumb: thumbnail (300px, valgfri)
 //   - scenario_id: påkrevd
-//   - kind: 'coords' | 'cards' | 'backgrounds' (default: 'coords')
+//   - kind: 'cards' | 'minigames' (default: 'cards')
 //
 // Returnerer { path, url, thumb_path?, thumb_url?, size, mimetype }
 router.post('/image', requireRole('superadmin'), (req, res) => {
@@ -51,9 +51,7 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
     }
 
     const scenarioId = parseInt(req.body.scenario_id, 10);
-    const kind = req.body.kind || 'coords';
-    // overwrite=true → erstatter eksisterende fil med samme path uten å lage suffix.
-    // Brukes for PNG-eksporter der filnavnet er deterministisk.
+    const kind = req.body.kind || 'cards';
     const overwrite = req.body.overwrite === 'true' || req.body.overwrite === true;
 
     if (!scenarioId || isNaN(scenarioId)) {
@@ -102,13 +100,6 @@ router.post('/image', requireRole('superadmin'), (req, res) => {
 
 // ─── DELETE /api/uploads/image ─────────────────────────────
 // body eller query: { path, url? }
-//   - path: påkrevd, brukes til å slette selve filen
-//   - url:  valgfri, brukes til å revoke shared link
-//
-// Hvis url ikke er gitt, slettes bare filen — Dropbox revoker shared
-// links automatisk når filen er borte, men det er litt slurv siden
-// linken da returnerer 404 mellom sletting og revoke. Send med url
-// hvis du har den.
 router.delete('/image', requireRole('superadmin'), async (req, res) => {
   const path = req.body?.path || req.query?.path;
   const url = req.body?.url || req.query?.url;
@@ -123,8 +114,6 @@ router.delete('/image', requireRole('superadmin'), async (req, res) => {
   }
 
   try {
-    // Revoke shared link først hvis vi har den (best effort — feil her
-    // er ikke kritiske, vi sletter filen uansett)
     if (url) {
       try {
         await revokeSharedLink(url);
@@ -137,47 +126,6 @@ router.delete('/image', requireRole('superadmin'), async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     console.error('Slette-feil:', e);
-    res.status(500).json({ error: e.message || 'Server feil' });
-  }
-});
-
-/* ─── GET /api/uploads/proxy ──────────────────────────────
-   Proxy for Dropbox shared links. Brukes av frontend n\u00e5r SVG → PNG
-   konverteres: fetch() direkte mot Dropbox shared links kan feile p\u00e5
-   grunn av CORS-headers, eller redirects til dl.dropboxusercontent.com
-   som ikke har CORS satt for alle origins. Backend henter bildet og
-   returnerer det med CORS=*.
-
-   Eksempel: GET /api/uploads/proxy?url=https://www.dropbox.com/...
-*/
-router.get('/proxy', requireRole('superadmin'), async (req, res) => {
-  let url = req.query.url;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'url-parameter p\u00e5krevd' });
-  }
-  // SVG-serialisering forvandler & til &amp; n\u00e5r URL-en ligger som
-  // attributt p\u00e5 et <image>-element. Det betyr at URL-en kan komme inn
-  // hit med &amp; i stedet for &. Dekod HTML-entiteter f\u00f8r vi fetcher.
-  url = url.replace(/&amp;/g, '&').replace(/&#38;/g, '&');
-
-  // Sikkerhets-sjekk: bare tillat Dropbox-URLer
-  if (!/^https:\/\/(www\.)?dropbox\.com\/|^https:\/\/dl\.dropboxusercontent\.com\//i.test(url)) {
-    return res.status(400).json({ error: 'Kun Dropbox-URLer er tillatt' });
-  }
-  try {
-    // Node 20+ har innebygd fetch
-    const r = await fetch(url, { redirect: 'follow' });
-    if (!r.ok) {
-      return res.status(r.status).json({ error: `Upstream returnerte ${r.status}` });
-    }
-    const buffer = Buffer.from(await r.arrayBuffer());
-    const contentType = r.headers.get('content-type') || 'application/octet-stream';
-    res.set('Content-Type', contentType);
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Cache-Control', 'public, max-age=600');
-    res.send(buffer);
-  } catch (e) {
-    console.error('Proxy-feil:', e);
     res.status(500).json({ error: e.message || 'Server feil' });
   }
 });

@@ -1,8 +1,24 @@
 const express = require('express');
-const { pool } = require('../db');
+const { pool, DEFAULT_SCENARIO_DATA } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Sørg for at scenario_data har alle påkrevde felter (defensiv normalisering
+// — kjøres på alle hent-respons slik at frontend aldri ser undefined-felter
+// selv om DB-raden ble lagret før migrasjonen til nytt skjema)
+function normalizeScenarioData(sd) {
+  if (!sd || typeof sd !== 'object') return { ...DEFAULT_SCENARIO_DATA };
+  return {
+    passwords: Array.isArray(sd.passwords) ? sd.passwords : [],
+    cards: Array.isArray(sd.cards) ? sd.cards : [],
+    minigames: Array.isArray(sd.minigames) ? sd.minigames : [],
+    fictional_server: sd.fictional_server && typeof sd.fictional_server === 'object'
+      ? { name: sd.fictional_server.name || 'Server', folders: Array.isArray(sd.fictional_server.folders) ? sd.fictional_server.folders : [] }
+      : { name: 'Server', folders: [] },
+    settings: { ...DEFAULT_SCENARIO_DATA.settings, ...(sd.settings || {}) },
+  };
+}
 
 // List scenarier — alle innloggede kan se aktive
 router.get('/', requireAuth, async (req, res) => {
@@ -11,9 +27,11 @@ router.get('/', requireAuth, async (req, res) => {
     const showInactive = user.role === 'superadmin' && req.query.all === '1';
 
     const where = showInactive ? '' : 'WHERE active = TRUE';
+    // passwords_count erstatter coord_count fra det gamle skjemaet —
+    // tallet vises i scenario-listen som indikasjon på "innhold".
     const { rows } = await pool.query(`
       SELECT id, name, description, time_limit_seconds, active, created_at,
-             COALESCE(jsonb_array_length(scenario_data->'coordinates'), 0) AS coord_count
+             COALESCE(jsonb_array_length(scenario_data->'passwords'), 0) AS passwords_count
       FROM scenarios ${where}
       ORDER BY created_at DESC
     `);
@@ -30,11 +48,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM scenarios WHERE id = $1', [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'Scenario ikke funnet' });
     const sc = rows[0];
-    if (!sc.scenario_data || typeof sc.scenario_data !== 'object') {
-      sc.scenario_data = { coordinates: [], settings: {} };
-    }
-    if (!Array.isArray(sc.scenario_data.coordinates)) sc.scenario_data.coordinates = [];
-    if (!sc.scenario_data.settings) sc.scenario_data.settings = {};
+    sc.scenario_data = normalizeScenarioData(sc.scenario_data);
     res.json(sc);
   } catch (err) {
     console.error(err);
@@ -49,15 +63,10 @@ router.post('/', requireRole('superadmin'), async (req, res) => {
     if (!name?.trim()) return res.status(400).json({ error: 'Navn påkrevd' });
 
     const defaultData = {
-      coordinates: [],
+      ...DEFAULT_SCENARIO_DATA,
       settings: {
+        ...DEFAULT_SCENARIO_DATA.settings,
         time_limit_enabled: !!time_limit_seconds,
-        show_score: true,
-        penalty_enabled: false,
-        penalty_amount: 1,
-        penalty_escalation: false,
-        penalty_escalation_after: 3,
-        penalty_escalation_amount: 2,
       },
     };
 
@@ -66,6 +75,7 @@ router.post('/', requireRole('superadmin'), async (req, res) => {
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [name.trim(), description || null, time_limit_seconds || 3600, req.user.id, JSON.stringify(defaultData)]
     );
+    rows[0].scenario_data = normalizeScenarioData(rows[0].scenario_data);
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -88,10 +98,9 @@ router.patch('/:id', requireRole('superadmin'), async (req, res) => {
       if (typeof scenario_data !== 'object') {
         return res.status(400).json({ error: 'scenario_data må være et objekt' });
       }
-      if (!Array.isArray(scenario_data.coordinates)) scenario_data.coordinates = [];
-      if (!scenario_data.settings) scenario_data.settings = {};
+      const normalized = normalizeScenarioData(scenario_data);
       updates.push(`scenario_data = $${i++}`);
-      params.push(JSON.stringify(scenario_data));
+      params.push(JSON.stringify(normalized));
     }
 
     if (updates.length === 0) return res.status(400).json({ error: 'Ingen endringer' });
@@ -102,6 +111,7 @@ router.patch('/:id', requireRole('superadmin'), async (req, res) => {
       params
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Scenario ikke funnet' });
+    rows[0].scenario_data = normalizeScenarioData(rows[0].scenario_data);
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
