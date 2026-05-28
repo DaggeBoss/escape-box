@@ -1209,6 +1209,7 @@ function renderEbBuilder() {
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" onclick="ebExit()">← Tilbake</button>
+        <button class="btn btn-success" onclick="ebOpenPreview()">▷ Test spillflyt</button>
         <button class="btn" onclick="ebSaveAll()">Lagre alt</button>
       </div>
     </div>
@@ -1527,6 +1528,283 @@ async function ebSaveAll() {
     await api(`/api/concepts/${ebb.conceptId}`, { method: 'PATCH', body: { config: ebb.config } });
     showToast('Spillflyt lagret', 'success');
   } catch (e) { showToast(e.message, 'error'); }
+}
+
+/* ════════════════════════════════════════════════════════
+   DELTAGER-FORHÅNDSVISNING (testmodus, inne i byggeren)
+   ────────────────────────────────────────────────────────
+   Spiller flyten klient-side fra ebb.config (snapshot), uten
+   backend. Liggende nettbrett-ramme. Den endelige deltager-
+   løsningen (play.html) gjenbruker samme flyt-logikk.
+   ──────────────────────────────────────────────────────── */
+let ebPreviewState = null;
+
+function ebOpenPreview() {
+  if (!ebb) return;
+  const cfg = JSON.parse(JSON.stringify(ebb.config));
+  const limit = ebb.concept.time_limit_seconds || 3600;
+  ebPreviewState = {
+    cfg, limit,
+    stageIndex: -1,
+    done: false,
+    completed: new Set(),
+    revealed: new Set(),
+    score: 0,
+    timeLeft: limit,
+    timer: null,
+    cardsOpen: false,
+  };
+  let ov = document.getElementById('eb-preview-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'eb-preview-overlay';
+    document.body.appendChild(ov);
+  }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(4,7,14,0.93);display:flex;align-items:center;justify-content:center;padding:16px;';
+  ebPreviewRender();
+}
+
+function ebPvClose() {
+  if (ebPreviewState && ebPreviewState.timer) clearInterval(ebPreviewState.timer);
+  const ov = document.getElementById('eb-preview-overlay');
+  if (ov) ov.remove();
+  ebPreviewState = null;
+}
+
+function ebPvFmt(s) {
+  s = Math.max(0, Math.floor(s));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function ebPvStartTimer() {
+  const st = ebPreviewState;
+  if (!st || st.timer) return;
+  st.timer = setInterval(() => {
+    if (!ebPreviewState) return;
+    ebPreviewState.timeLeft -= 1;
+    const el = document.getElementById('eb-pv-time');
+    if (el) el.textContent = ebPvFmt(ebPreviewState.timeLeft);
+    if (ebPreviewState.timeLeft <= 0) { clearInterval(ebPreviewState.timer); ebPreviewState.timer = null; }
+  }, 1000);
+}
+
+function ebPvStart() {
+  ebPreviewState.stageIndex = 0;
+  ebPvStartTimer();
+  ebPreviewRender();
+}
+
+function ebPvCompleteStep(stepId) {
+  ebPreviewState.completed.add(stepId);
+  ebPreviewRender();
+}
+
+function ebPvCheckPassword(stepId) {
+  const st = ebPreviewState;
+  const stage = st.cfg.flow[st.stageIndex];
+  const step = stage && stage.steps.find(s => s.id === stepId);
+  if (!step) return;
+  const input = document.getElementById(`eb-pv-pw-${stepId}`);
+  const val = (input ? input.value : '').trim().toLowerCase();
+  if (val && val === String(step.password || '').trim().toLowerCase()) {
+    if (!st.completed.has(stepId)) {
+      st.completed.add(stepId);
+      st.score += step.points || 0;
+      (step.reveal_card_ids || []).forEach(id => st.revealed.add(id));
+    }
+    ebPreviewRender();
+  } else {
+    showToast('Feil kode', 'error');
+    if (input) { input.value = ''; input.focus(); }
+  }
+}
+
+function ebPvAdvance() {
+  const st = ebPreviewState;
+  const stage = st.cfg.flow[st.stageIndex];
+  if (!stage || !stage.steps.every(s => st.completed.has(s.id))) return;
+  st.stageIndex += 1;
+  if (st.stageIndex >= st.cfg.flow.length) {
+    st.done = true;
+    if (st.timer) { clearInterval(st.timer); st.timer = null; }
+  }
+  ebPreviewRender();
+}
+
+function ebPvToggleCards() {
+  ebPreviewState.cardsOpen = !ebPreviewState.cardsOpen;
+  ebPreviewRender();
+}
+
+function ebPvReplay() { ebOpenPreview(); }
+
+/* ─── Render ─────────────────────────────────────────────── */
+function ebPreviewRender() {
+  const ov = document.getElementById('eb-preview-overlay');
+  const st = ebPreviewState;
+  if (!ov || !st) return;
+  const cfg = st.cfg;
+  const showScore = cfg.settings && cfg.settings.show_score !== false;
+  const showTimer = cfg.settings && cfg.settings.time_limit_enabled !== false;
+
+  const topbar = `
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:10px 16px;background:rgba(0,0,0,0.35);border-bottom:1px solid rgba(86,204,242,0.25);">
+      <span style="font-size:11px;letter-spacing:0.18em;color:#56ccf2;text-transform:uppercase;">Testmodus</span>
+      <span style="flex:1;"></span>
+      ${showTimer ? `<span style="font-family:monospace;font-size:18px;color:#ffd166;" id="eb-pv-time">${ebPvFmt(st.timeLeft)}</span>` : ''}
+      ${showScore ? `<span style="font-family:monospace;font-size:16px;color:#9fe;">${st.score} p</span>` : ''}
+      <button onclick="ebPvToggleCards()" style="${ebPvBtn('ghost')}">Kort (${st.revealed.size})</button>
+    </div>`;
+
+  let body;
+  if (st.cardsOpen) {
+    body = ebPvCardsScreen();
+  } else if (st.stageIndex < 0) {
+    body = ebPvIntroScreen();
+  } else if (st.done || st.stageIndex >= cfg.flow.length) {
+    body = ebPvDoneScreen();
+  } else {
+    body = ebPvStageScreen();
+  }
+
+  ov.innerHTML = `
+    <button onclick="ebPvClose()" title="Lukk" style="position:absolute;top:14px;right:18px;background:none;border:none;color:#aeb8c8;font-size:26px;cursor:pointer;">✕</button>
+    <div style="width:min(1100px,96vw);aspect-ratio:4/3;max-height:90vh;background:#0a0e1a;border:14px solid #05070e;border-radius:26px;box-shadow:0 30px 80px rgba(0,0,0,0.6);overflow:hidden;display:flex;flex-direction:column;">
+      <div style="flex:1;display:flex;flex-direction:column;background:radial-gradient(120% 120% at 50% 0%, #122036 0%, #0a1322 60%, #070d18 100%);color:#e6edf6;font-family:system-ui,-apple-system,sans-serif;overflow:hidden;">
+        ${topbar}
+        <div id="eb-pv-screen" style="flex:1;overflow:auto;padding:26px 30px;">${body}</div>
+      </div>
+    </div>
+  `;
+}
+
+function ebPvBtn(kind) {
+  if (kind === 'ghost') return 'background:rgba(86,204,242,0.12);border:1px solid rgba(86,204,242,0.4);color:#9fe;padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;';
+  if (kind === 'amber') return 'background:#ffd166;border:none;color:#1a1400;padding:11px 22px;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;';
+  return 'background:#56ccf2;border:none;color:#04121c;padding:11px 22px;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;';
+}
+
+function ebPvMedia(url) {
+  if (!url) return '';
+  return `<img src="${escapeHtml(url)}" style="max-width:100%;max-height:240px;border-radius:10px;margin:14px 0;border:1px solid rgba(255,255,255,0.1);">`;
+}
+
+function ebPvIntroScreen() {
+  const cfg = ebPreviewState.cfg;
+  if (cfg.flow.length === 0) {
+    return `<div style="text-align:center;padding-top:40px;color:#aeb8c8;">Ingen steg bygget ennå. Legg til steg i Spillflyt-fanen først.</div>`;
+  }
+  return `
+    <div style="max-width:680px;margin:0 auto;text-align:center;padding-top:18px;">
+      <div style="font-size:12px;letter-spacing:0.2em;color:#56ccf2;text-transform:uppercase;">${escapeHtml(ebb.concept.name)}</div>
+      <h1 style="font-size:32px;margin:12px 0;">${escapeHtml(cfg.intro.title || 'Velkommen')}</h1>
+      ${ebPvMedia(cfg.intro.media_url)}
+      <p style="color:#c4cfdd;line-height:1.6;white-space:pre-wrap;">${escapeHtml(cfg.intro.body || '')}</p>
+      <button onclick="ebPvStart()" style="${ebPvBtn('primary')};margin-top:22px;">▶ Start oppdraget</button>
+    </div>`;
+}
+
+function ebPvStageScreen() {
+  const st = ebPreviewState;
+  const cfg = st.cfg;
+  const stage = cfg.flow[st.stageIndex];
+  const isParallel = stage.mode === 'parallel';
+  const allDone = stage.steps.every(s => st.completed.has(s.id));
+
+  const header = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+      <span style="font-size:12px;letter-spacing:0.18em;color:#56ccf2;text-transform:uppercase;">Steg ${st.stageIndex + 1} / ${cfg.flow.length}</span>
+      ${isParallel ? `<span style="font-size:11px;background:rgba(255,209,102,0.15);color:#ffd166;border:1px solid rgba(255,209,102,0.4);padding:2px 8px;border-radius:20px;">Fullfør alle ${stage.steps.length}</span>` : ''}
+    </div>`;
+
+  const steps = stage.steps.map(step => ebPvStepCard(step)).join('');
+
+  const next = allDone
+    ? `<div style="text-align:center;margin-top:22px;"><button onclick="ebPvAdvance()" style="${ebPvBtn('amber')}">${st.stageIndex + 1 >= cfg.flow.length ? 'Fullfør ▸' : 'Neste ▸'}</button></div>`
+    : '';
+
+  return `<div style="max-width:760px;margin:0 auto;">${header}${steps}${next}</div>`;
+}
+
+function ebPvStepCard(step) {
+  const st = ebPreviewState;
+  const done = st.completed.has(step.id);
+  const border = done ? 'rgba(111,207,151,0.5)' : 'rgba(255,255,255,0.12)';
+  let inner = `
+    <div style="display:flex;align-items:center;gap:10px;">
+      <h3 style="margin:0;font-size:18px;">${escapeHtml(step.title || '(uten tittel)')}</h3>
+      ${done ? '<span style="color:#6fcf97;font-size:14px;">✓ Fullført</span>' : ''}
+    </div>
+    ${ebPvMedia(step.media_url)}
+    ${step.body ? `<p style="color:#c4cfdd;line-height:1.6;white-space:pre-wrap;margin:10px 0;">${escapeHtml(step.body)}</p>` : ''}`;
+
+  if (step.type === 'password') {
+    if (done) {
+      const cards = (step.reveal_card_ids || []).map(id => {
+        const c = (st.cfg.cards || []).find(x => x.id === id);
+        return c ? ebPvCardMini(c) : '';
+      }).join('');
+      inner += cards ? `<div style="margin-top:10px;"><div style="font-size:12px;color:#56ccf2;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Avdekket</div><div style="display:flex;flex-wrap:wrap;gap:10px;">${cards}</div></div>` : '';
+    } else {
+      inner += `
+        <div style="display:flex;gap:10px;margin-top:8px;">
+          <input id="eb-pv-pw-${step.id}" type="text" inputmode="latin" placeholder="Skriv kode…" style="flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.4);color:#e6edf6;padding:11px 14px;border-radius:10px;font-family:monospace;font-size:16px;">
+          <button onclick="ebPvCheckPassword('${step.id}')" style="${ebPvBtn('primary')}">Lås opp</button>
+        </div>`;
+    }
+  } else if (step.type === 'minigame') {
+    const mg = (st.cfg.minigames || []).find(m => m.id === step.unlock_minigame_id);
+    inner += `<div style="margin-top:8px;padding:12px;background:rgba(0,0,0,0.25);border-radius:10px;color:#aeb8c8;font-size:13px;">Minispill: <strong>${escapeHtml(mg ? mg.title : '(ikke valgt)')}</strong> — implementeres senere.</div>`;
+    if (!done) inner += `<div style="margin-top:10px;"><button onclick="ebPvCompleteStep('${step.id}')" style="${ebPvBtn('ghost')}">Marker som fullført (test)</button></div>`;
+  } else {
+    if (!done) inner += `<div style="margin-top:10px;"><button onclick="ebPvCompleteStep('${step.id}')" style="${ebPvBtn('primary')}">Fortsett ▸</button></div>`;
+  }
+
+  return `<div style="background:rgba(255,255,255,0.03);border:1px solid ${border};border-radius:14px;padding:18px 20px;margin-bottom:14px;">${inner}</div>`;
+}
+
+function ebPvCardMini(c) {
+  return `
+    <div style="width:140px;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.3);border-radius:10px;overflow:hidden;">
+      ${c.image_url ? `<img src="${escapeHtml(c.image_url)}" style="width:100%;height:84px;object-fit:cover;">` : ''}
+      <div style="padding:8px 10px;"><div style="font-size:13px;font-weight:600;">${escapeHtml(c.title || '')}</div></div>
+    </div>`;
+}
+
+function ebPvCardsScreen() {
+  const st = ebPreviewState;
+  const cards = Array.from(st.revealed).map(id => (st.cfg.cards || []).find(c => c.id === id)).filter(Boolean);
+  const list = cards.length === 0
+    ? `<div style="color:#aeb8c8;text-align:center;padding-top:30px;">Ingen kort avdekket ennå.</div>`
+    : `<div style="display:flex;flex-wrap:wrap;gap:14px;">${cards.map(c => `
+        <div style="width:220px;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.3);border-radius:12px;overflow:hidden;">
+          ${c.image_url ? `<img src="${escapeHtml(c.image_url)}" style="width:100%;height:130px;object-fit:cover;">` : ''}
+          <div style="padding:12px 14px;"><div style="font-weight:600;margin-bottom:6px;">${escapeHtml(c.title || '')}</div><div style="font-size:13px;color:#c4cfdd;white-space:pre-wrap;">${escapeHtml(c.body || '')}</div></div>
+        </div>`).join('')}</div>`;
+  return `
+    <div style="max-width:780px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;font-size:22px;">Innhentede kort</h2>
+        <button onclick="ebPvToggleCards()" style="${ebPvBtn('ghost')}">← Tilbake</button>
+      </div>
+      ${list}
+    </div>`;
+}
+
+function ebPvDoneScreen() {
+  const st = ebPreviewState;
+  const showScore = st.cfg.settings && st.cfg.settings.show_score !== false;
+  return `
+    <div style="max-width:620px;margin:0 auto;text-align:center;padding-top:36px;">
+      <div style="font-size:48px;">✓</div>
+      <h1 style="font-size:30px;margin:12px 0;">Alle steg fullført</h1>
+      ${showScore ? `<div style="font-family:monospace;font-size:22px;color:#9fe;margin:10px 0;">${st.score} poeng</div>` : ''}
+      <p style="color:#aeb8c8;line-height:1.6;">Finalen (lagnummer, navn, portrett og bolig) bygges i bolk 3 og kommer her.</p>
+      <div style="margin-top:22px;display:flex;gap:12px;justify-content:center;">
+        <button onclick="ebPvReplay()" style="${ebPvBtn('ghost')}">↺ Spill på nytt</button>
+        <button onclick="ebPvClose()" style="${ebPvBtn('primary')}">Avslutt test</button>
+      </div>
+    </div>`;
 }
 
 
