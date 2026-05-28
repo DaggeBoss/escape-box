@@ -1104,33 +1104,32 @@ async function deleteConcept(id) {
 /* ════════════════════════════════════════════════════════
    KONSEPT-BYGGER
    ────────────────────────────────────────────────────────
-   openConceptBuilder ruter på key:
-     - escape_box -> full-side Spillflyt-bygger (bolk 1)
-     - andre      -> enkel metadata-modal
-   Escape Box-byggeren redigerer konseptets `config` i minnet
-   (ebb) og lagrer alt samlet via PATCH.
+   escape_box -> kort-graf-bygger. Andre konsepter -> enkel meta-modal.
+   Modell (config):
+     cards[]: { id, title, surface:'work'|'ib', code?, track, order,
+                requires:{ mode:'all'|'any', conditions:[ {type:'card_done',card_id} | {type:'code',code} ] },
+                blocks:[ info|question|unlock ]   (surface 'work')
+                ib:{ intro_text, active_codes[], place_count, correct_codes[],
+                     points_correct, points_wrong, discard_hint, success_text }  (surface 'ib') }
+   Et fysisk kort = et kort med `code` satt.
    ──────────────────────────────────────────────────────── */
 
 let ebb = null; // { conceptId, concept, config, tab }
+let ebDragId = null;
 
 async function openConceptBuilder(conceptId) {
   state.currentConceptId = conceptId;
   let c;
-  try {
-    c = await api(`/api/concepts/${conceptId}`);
-  } catch (e) {
-    showToast('Kunne ikke hente konsept: ' + e.message, 'error');
-    return;
-  }
+  try { c = await api(`/api/concepts/${conceptId}`); }
+  catch (e) { showToast('Kunne ikke hente konsept: ' + e.message, 'error'); return; }
   if (c.key === 'escape_box') {
-    ebb = { conceptId, concept: c, config: normalizeEbConfig(c.config), tab: 'flow' };
+    ebb = { conceptId, concept: c, config: ebNormalizeConfig(c.config), tab: 'cards' };
     renderEbBuilder();
   } else {
     openSimpleConceptMeta(c);
   }
 }
 
-// Enkel metadata-editor for konsepter uten skreddersydd bygger
 function openSimpleConceptMeta(c) {
   openModal({
     title: `Bygg: ${c.name}`,
@@ -1144,10 +1143,7 @@ function openSimpleConceptMeta(c) {
       <div class="muted" style="font-size:13px;margin-top:10px;">Ingen skreddersydd bygger for dette konseptet ennå.</div>
       <div id="c-edit-error" class="form-error hidden" style="margin-top:12px;"></div>
     `,
-    footer: `
-      <button class="btn btn-secondary" onclick="closeModal()">Lukk</button>
-      <button class="btn" onclick="saveConceptMeta(${c.id})">Lagre</button>
-    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Lukk</button><button class="btn" onclick="saveConceptMeta(${c.id})">Lagre</button>`,
   });
 }
 
@@ -1159,45 +1155,76 @@ async function saveConceptMeta(conceptId) {
   const errEl = $('#c-edit-error');
   if (!name) { errEl.textContent = 'Navn påkrevd'; errEl.classList.remove('hidden'); return; }
   try {
-    await api(`/api/concepts/${conceptId}`, {
-      method: 'PATCH',
-      body: { name, key: key || undefined, description: description || null, time_limit_seconds: (mins > 0 ? mins : 60) * 60 },
-    });
+    await api(`/api/concepts/${conceptId}`, { method: 'PATCH', body: { name, key: key || undefined, description: description || null, time_limit_seconds: (mins > 0 ? mins : 60) * 60 } });
     showToast('Konsept lagret', 'success');
     closeModal();
     if (state.currentView === 'concepts') goto('concepts');
   } catch (e) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
 }
 
-/* ─── Escape Box-bygger: state-hjelpere ─────────────────── */
-function ebUid(prefix) {
-  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-}
+/* ─── Modell-hjelpere ───────────────────────────────────── */
+function ebUid(p) { return `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
 
-function normalizeEbConfig(cfg) {
+function ebNormalizeConfig(cfg) {
   cfg = cfg && typeof cfg === 'object' ? cfg : {};
+  const cards = Array.isArray(cfg.cards) ? cfg.cards.map((c, i) => ebNormalizeCard(c, i)) : [];
   return {
     intro: cfg.intro && typeof cfg.intro === 'object'
       ? { title: cfg.intro.title || '', body: cfg.intro.body || '', media_url: cfg.intro.media_url || '' }
       : { title: '', body: '', media_url: '' },
-    flow: Array.isArray(cfg.flow) ? cfg.flow : [],
-    cards: Array.isArray(cfg.cards) ? cfg.cards : [],
-    minigames: Array.isArray(cfg.minigames) ? cfg.minigames : [],
-    fictional_server: cfg.fictional_server && typeof cfg.fictional_server === 'object'
-      ? cfg.fictional_server : { name: 'Server', folders: [] },
+    cards,
+    settings: {
+      time_limit_enabled: true, show_score: true, require_consent: true, streetview_enabled: true, hint_cost: 0,
+      ...(cfg.settings || {}),
+    },
     finale: cfg.finale && typeof cfg.finale === 'object' ? cfg.finale : null,
     bigscreen: cfg.bigscreen && typeof cfg.bigscreen === 'object' ? cfg.bigscreen : null,
-    settings: {
-      time_limit_enabled: true, show_score: true, require_consent: true, streetview_enabled: true,
-      ...(cfg.settings || {}),
+  };
+}
+
+function ebNormalizeCard(c, i) {
+  c = c && typeof c === 'object' ? c : {};
+  const surface = c.surface === 'ib' ? 'ib' : 'work';
+  const req = c.requires && typeof c.requires === 'object' ? c.requires : {};
+  return {
+    id: c.id || ebUid('card'),
+    title: c.title || '',
+    surface,
+    code: c.code || '',
+    track: Number.isInteger(c.track) ? c.track : 0,
+    order: typeof c.order === 'number' ? c.order : i,
+    requires: {
+      mode: req.mode === 'any' ? 'any' : 'all',
+      conditions: Array.isArray(req.conditions) ? req.conditions : [],
+    },
+    blocks: Array.isArray(c.blocks) ? c.blocks : [],
+    ib: c.ib && typeof c.ib === 'object' ? c.ib : {
+      intro_text: '', active_codes: [], place_count: 1, correct_codes: [],
+      points_correct: 0, points_wrong: 0, discard_hint: '', success_text: '',
     },
   };
 }
 
 function ebRoot() { return $('#content .view[data-view="concepts"]'); }
+function ebCardById(id) { return ebb.config.cards.find(c => c.id === id); }
 
-const EB_STEP_TYPES = { info: 'Info / historie', password: 'Passord', minigame: 'Minispill' };
+// Kompakte track/order-verdier etter flytting/sletting
+function ebNormalizeOrder() {
+  const cards = ebb.config.cards;
+  const tracks = [...new Set(cards.map(c => c.track))].sort((a, b) => a - b);
+  const remap = {};
+  tracks.forEach((t, i) => { remap[t] = i; });
+  cards.forEach(c => { c.track = remap[c.track]; });
+  tracks.forEach((t, i) => {
+    cards.filter(c => c.track === i).sort((a, b) => a.order - b.order).forEach((c, j) => { c.order = j; });
+  });
+}
 
+function ebMaxTrack() {
+  return ebb.config.cards.reduce((m, c) => Math.max(m, c.track), -1);
+}
+
+/* ─── Render ────────────────────────────────────────────── */
 function renderEbBuilder() {
   const root = ebRoot();
   if (!root || !ebb) return;
@@ -1213,22 +1240,47 @@ function renderEbBuilder() {
         <button class="btn" onclick="ebSaveAll()">Lagre alt</button>
       </div>
     </div>
-
     <div class="flex-gap mb-2" style="border-bottom:1px solid var(--bg3);padding-bottom:8px;">
-      <button class="btn btn-sm ${ebb.tab === 'flow' ? '' : 'btn-ghost'}" onclick="ebSetTab('flow')">1 · Spillflyt</button>
+      <button class="btn btn-sm ${ebb.tab === 'cards' ? '' : 'btn-ghost'}" onclick="ebSetTab('cards')">1 · Kort &amp; flyt</button>
       <button class="btn btn-sm btn-ghost" disabled title="Bolk 2">2 · GM-panel</button>
       <button class="btn btn-sm btn-ghost" disabled title="Bolk 3">3 · Storskjerm</button>
     </div>
-
-    ${ebFlowTab()}
+    ${ebCardsTab()}
   `;
 }
 
 function ebSetTab(t) { ebb.tab = t; renderEbBuilder(); }
 function ebExit() { ebb = null; goto('concepts'); }
 
-function ebFlowTab() {
+function ebOpenPreview() {
+  showToast('Test-visningen bygges om mot kort-modellen i Del B', 'info', 3500);
+}
+
+function ebCardsTab() {
   const c = ebb.config;
+  const maxT = ebMaxTrack();
+  let columns = '';
+  for (let t = 0; t <= Math.max(0, maxT); t++) {
+    const cards = c.cards.filter(x => x.track === t).sort((a, b) => a.order - b.order);
+    columns += `
+      <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnTrack(event, ${t})"
+           style="flex:0 0 290px;background:var(--bg2,#11151f);border:1px solid var(--bg3);border-radius:12px;padding:10px;">
+        <div class="muted" style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">${t === 0 ? 'Hovedløp' : 'Parallelt løp ' + t}</div>
+        ${cards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;">Tomt løp</div>'}
+        <div class="flex-gap" style="margin-top:8px;">
+          <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${t}, 'work')">+ Kort</button>
+          <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${t}, 'ib')">+ IB-runde</button>
+        </div>
+      </div>`;
+  }
+  // Drop-sone for nytt parallelt løp
+  columns += `
+    <div ondragover="event.preventDefault()" ondrop="ebDropNewTrack(event)"
+         style="flex:0 0 150px;border:1px dashed var(--bg3);border-radius:12px;padding:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--ink3,#8a93a6);">
+      <div style="font-size:12px;text-align:center;">Slipp her for nytt parallelt løp</div>
+      <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${maxT + 1 < 1 ? 1 : maxT + 1}, 'work')">+ Nytt løp</button>
+    </div>`;
+
   return `
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">▸</span> Intro <span class="ph-spacer"></span>
@@ -1241,141 +1293,118 @@ function ebFlowTab() {
     </div>
 
     <div class="panel">
-      <div class="panel-header"><span class="ph-icon">⟱</span> Spillflyt <span class="ph-spacer"></span>
-        <button class="btn btn-sm btn-secondary" onclick="ebAddStage('single')">+ Steg</button>
-        <button class="btn btn-sm btn-secondary" onclick="ebAddStage('parallel')">+ Parallelt løp</button>
+      <div class="panel-header"><span class="ph-icon">▦</span> Kort &amp; flyt
+        <span class="ph-spacer"></span>
+        <span class="muted" style="font-size:11px;">Dra kort opp/ned eller til et annet løp</span>
       </div>
       <div class="panel-body">
-        ${c.flow.length === 0
-          ? `<div class="muted text-center" style="padding:18px;">Ingen steg ennå. Legg til et steg eller et parallelt løp.</div>`
-          : c.flow.map((st, i) => ebStageCard(st, i, c.flow.length)).join('')}
-      </div>
-    </div>
-
-    ${ebCardsPanel()}
-    ${ebMinigamesPanel()}
-  `;
-}
-
-function ebStageCard(stage, idx, total) {
-  const isParallel = stage.mode === 'parallel';
-  const steps = Array.isArray(stage.steps) ? stage.steps : [];
-  return `
-    <div class="panel" style="margin-bottom:12px;border:1px solid var(--bg3);">
-      <div class="panel-header" style="font-size:13px;">
-        <span class="badge ${isParallel ? 'amber' : 'blue'}">${idx + 1}. ${isParallel ? 'Parallelt løp — alle må fullføres' : 'Steg'}</span>
-        <span class="ph-spacer"></span>
-        <button class="btn btn-sm btn-ghost" onclick="ebMoveStage(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
-        <button class="btn btn-sm btn-ghost" onclick="ebMoveStage(${idx}, 1)" ${idx === total - 1 ? 'disabled' : ''}>↓</button>
-        ${isParallel ? `<button class="btn btn-sm btn-secondary" onclick="ebStepModal(${idx}, null)">+ Steg i løpet</button>` : ''}
-        <button class="btn btn-sm btn-danger" onclick="ebDeleteStage(${idx})">Slett</button>
-      </div>
-      <div class="panel-body tight">
-        <table class="data-table">
-          <tbody>
-            ${steps.map((step, ti) => ebStepRow(step, idx, ti)).join('') || `<tr><td class="muted" style="padding:10px;">Tomt</td></tr>`}
-          </tbody>
-        </table>
+        ${c.cards.length === 0 ? '<div class="muted" style="margin-bottom:10px;">Ingen kort ennå. Legg til et kort eller en IB-runde nedenfor.</div>' : ''}
+        <div style="display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;">
+          ${columns}
+        </div>
       </div>
     </div>
   `;
 }
 
-function ebStepRow(step, si, ti) {
-  const cards = ebb.config.cards;
-  const revealCount = Array.isArray(step.reveal_card_ids) ? step.reveal_card_ids.length : 0;
-  let detail = '';
-  if (step.type === 'password') {
-    detail = `<span class="col-mono">${escapeHtml(step.password || '----')}</span> · ${step.points || 0} p${revealCount ? ` · ${revealCount} kort` : ''}`;
-  } else if (step.type === 'minigame') {
-    const mg = (ebb.config.minigames || []).find(m => m.id === step.unlock_minigame_id);
-    detail = mg ? escapeHtml(mg.title) : '(ingen valgt)';
-  }
+function ebTileHtml(card) {
+  const isIb = card.surface === 'ib';
+  const badge = isIb
+    ? '<span class="badge amber">Investigation Board</span>'
+    : '<span class="badge blue">Arbeidsområde</span>';
+  const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">FYSISK · ${escapeHtml(card.code)}</span>` : '';
+  const reqs = ebRequiresSummary(card);
+  const trig = ebTriggersSummary(card);
+  const count = isIb ? '' : `<span class="muted" style="font-size:11px;">${(card.blocks || []).length} blokk(er)</span>`;
   return `
-    <tr>
-      <td style="width:120px;"><span class="badge dark">${escapeHtml(EB_STEP_TYPES[step.type] || step.type)}</span></td>
-      <td><strong>${escapeHtml(step.title || '(uten tittel)')}</strong><div class="muted" style="font-size:12px;">${detail}</div></td>
-      <td class="col-actions" style="width:140px;">
-        <button class="btn btn-sm" onclick="ebStepModal(${si}, ${ti})">Rediger</button>
-        <button class="btn btn-sm btn-danger" onclick="ebDeleteStep(${si}, ${ti})">Slett</button>
-      </td>
-    </tr>
-  `;
+    <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
+         style="background:var(--bg1,#0c1018);border:1px solid var(--bg3);border-left:3px solid ${isIb ? '#ffd166' : '#56ccf2'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
+      <div class="flex-gap" style="align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${badge} ${codeChip}</div>
+      <div style="font-weight:600;font-size:14px;margin-bottom:4px;">${escapeHtml(card.title || '(uten tittel)')}</div>
+      ${count}
+      <div class="muted" style="font-size:11px;margin-top:6px;line-height:1.5;">
+        <div><span style="color:#6fcf97;">▸ Vises når:</span> ${reqs}</div>
+        ${trig ? `<div><span style="color:#ffd166;">▸ Åpner:</span> ${trig}</div>` : ''}
+      </div>
+      <div class="flex-gap" style="margin-top:8px;">
+        <button class="btn btn-sm" onclick="ebCardModal('${card.id}')">Rediger</button>
+        <button class="btn btn-sm btn-danger" onclick="ebDeleteCard('${card.id}')">Slett</button>
+      </div>
+    </div>`;
 }
 
-function ebCardsPanel() {
-  const cards = ebb.config.cards;
-  return `
-    <div class="panel">
-      <div class="panel-header"><span class="ph-icon">▤</span> Kort-bibliotek <span class="ph-spacer"></span>
-        <button class="btn btn-sm btn-secondary" onclick="ebCardModal(null)">+ Kort</button>
-      </div>
-      <div class="panel-body tight">
-        ${cards.length === 0
-          ? `<div class="muted" style="padding:12px;">Ingen kort ennå. Kort kan avsløres av passord-steg.</div>`
-          : `<table class="data-table"><tbody>
-              ${cards.map((c, i) => `
-                <tr>
-                  <td><strong>${escapeHtml(c.title || '(uten tittel)')}</strong><div class="muted" style="font-size:12px;">${escapeHtml((c.body || '').slice(0, 60))}</div></td>
-                  <td class="col-mono" style="font-size:11px;">${c.image_url ? '🖼' : '—'}</td>
-                  <td class="col-actions" style="width:140px;">
-                    <button class="btn btn-sm" onclick="ebCardModal(${i})">Rediger</button>
-                    <button class="btn btn-sm btn-danger" onclick="ebDeleteCard(${i})">Slett</button>
-                  </td>
-                </tr>`).join('')}
-            </tbody></table>`}
-      </div>
-    </div>
-  `;
+function ebRequiresSummary(card) {
+  const conds = card.requires.conditions || [];
+  if (conds.length === 0) return 'fra start';
+  const parts = conds.map(c => {
+    if (c.type === 'card_done') {
+      const t = ebCardById(c.card_id);
+      return t ? `«${escapeHtml(t.title || 'kort')}» utført` : '(slettet kort)';
+    }
+    if (c.type === 'code') return `kode ${escapeHtml(c.code)}`;
+    return '?';
+  });
+  const join = card.requires.mode === 'any' ? ' eller ' : ' og ';
+  return parts.join(join);
 }
 
-function ebMinigamesPanel() {
-  const mgs = ebb.config.minigames;
-  return `
-    <div class="panel">
-      <div class="panel-header"><span class="ph-icon">◈</span> Minispill-bibliotek <span class="ph-spacer"></span>
-        <button class="btn btn-sm btn-secondary" onclick="ebMinigameModal(null)">+ Minispill</button>
-      </div>
-      <div class="panel-body tight">
-        ${mgs.length === 0
-          ? `<div class="muted" style="padding:12px;">Ingen minispill ennå.</div>`
-          : `<table class="data-table"><tbody>
-              ${mgs.map((m, i) => `
-                <tr>
-                  <td><strong>${escapeHtml(m.title || '(uten tittel)')}</strong></td>
-                  <td class="col-mono" style="font-size:12px;">${escapeHtml(m.type || '—')}</td>
-                  <td class="col-actions" style="width:140px;">
-                    <button class="btn btn-sm" onclick="ebMinigameModal(${i})">Rediger</button>
-                    <button class="btn btn-sm btn-danger" onclick="ebDeleteMinigame(${i})">Slett</button>
-                  </td>
-                </tr>`).join('')}
-            </tbody></table>`}
-      </div>
-    </div>
-  `;
+function ebTriggersSummary(card) {
+  const out = [];
+  ebb.config.cards.forEach(other => {
+    if (other.id === card.id) return;
+    const conds = other.requires.conditions || [];
+    const hit = conds.some(c =>
+      (c.type === 'card_done' && c.card_id === card.id) ||
+      (c.type === 'code' && card.code && c.code === card.code)
+    );
+    if (hit) out.push(`«${escapeHtml(other.title || 'kort')}»`);
+  });
+  return out.join(', ');
 }
 
-/* ─── Mutatorer (oppdaterer ebb.config + re-render) ─────── */
-function ebNewStep(type) {
-  return { id: ebUid('step'), type: type || 'info', title: '', body: '', media_url: '', password: '', points: 0, reveal_card_ids: [], unlock_minigame_id: '' };
+/* ─── Drag & drop ───────────────────────────────────────── */
+function ebDragStart(ev, id) { ebDragId = id; ev.dataTransfer.effectAllowed = 'move'; }
+function ebDropOnCard(ev, targetId) {
+  ev.preventDefault(); ev.stopPropagation();
+  const d = ebCardById(ebDragId), t = ebCardById(targetId);
+  if (!d || !t || d.id === t.id) { ebDragId = null; return; }
+  d.track = t.track;
+  d.order = t.order - 0.5;
+  ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
 }
-function ebAddStage(mode) {
-  ebb.config.flow.push({ id: ebUid('stage'), mode: mode === 'parallel' ? 'parallel' : 'single', steps: [ebNewStep('info')] });
-  renderEbBuilder();
+function ebDropOnTrack(ev, track) {
+  ev.preventDefault();
+  const d = ebCardById(ebDragId);
+  if (!d) return;
+  d.track = track; d.order = 1e9;
+  ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
 }
-function ebDeleteStage(idx) {
-  ebb.config.flow.splice(idx, 1);
-  renderEbBuilder();
+function ebDropNewTrack(ev) {
+  ev.preventDefault();
+  const d = ebCardById(ebDragId);
+  if (!d) return;
+  d.track = ebMaxTrack() + 1; d.order = 0;
+  ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
 }
-function ebMoveStage(idx, dir) {
-  const f = ebb.config.flow;
-  const j = idx + dir;
-  if (j < 0 || j >= f.length) return;
-  [f[idx], f[j]] = [f[j], f[idx]];
-  renderEbBuilder();
+
+/* ─── Mutatorer ─────────────────────────────────────────── */
+function ebAddCard(track, surface) {
+  const card = ebNormalizeCard({ id: ebUid('card'), surface, track, order: 1e9, title: surface === 'ib' ? 'IB-runde' : 'Nytt kort' }, 0);
+  ebb.config.cards.push(card);
+  ebNormalizeOrder();
+  ebCardModal(card.id);
 }
-function ebDeleteStep(si, ti) {
-  ebb.config.flow[si].steps.splice(ti, 1);
+function ebDeleteCard(id) {
+  const card = ebCardById(id);
+  if (!card) return;
+  // Fjern betingelser i andre kort som peker hit
+  ebb.config.cards.forEach(o => {
+    o.requires.conditions = (o.requires.conditions || []).filter(c =>
+      !((c.type === 'card_done' && c.card_id === id) || (c.type === 'code' && card.code && c.code === card.code)));
+  });
+  ebb.config.cards = ebb.config.cards.filter(c => c.id !== id);
+  ebNormalizeOrder();
+  closeModal();
   renderEbBuilder();
 }
 
@@ -1390,422 +1419,226 @@ function ebIntroModal() {
     `,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre</button>`,
     onSubmit: () => {
-      ebb.config.intro = {
-        title: $('#eb-intro-title').value.trim(),
-        body: $('#eb-intro-body').value.trim(),
-        media_url: $('#eb-intro-media').value.trim(),
-      };
+      ebb.config.intro = { title: $('#eb-intro-title').value.trim(), body: $('#eb-intro-body').value.trim(), media_url: $('#eb-intro-media').value.trim() };
       closeModal(); renderEbBuilder();
     },
   });
 }
 
-function ebStepModal(si, ti) {
-  const isNew = ti === null || ti === undefined;
-  const step = isNew ? ebNewStep('info') : ebb.config.flow[si].steps[ti];
-  const cards = ebb.config.cards;
-  const mgs = ebb.config.minigames;
-  const typeOptions = Object.entries(EB_STEP_TYPES).map(([v, l]) => `<option value="${v}" ${step.type === v ? 'selected' : ''}>${l}</option>`).join('');
+/* ─── Kort-editor ───────────────────────────────────────── */
+function ebSetCardField(id, field, value) {
+  const c = ebCardById(id); if (!c) return;
+  c[field] = field === 'code' ? value.trim().toUpperCase() : value;
+}
+function ebSetCardSurface(id, value) {
+  const c = ebCardById(id); if (!c) return;
+  c.surface = value === 'ib' ? 'ib' : 'work';
+  ebCardModal(id); // re-render for å bytte felter
+}
+function ebSetReqMode(id, mode) {
+  const c = ebCardById(id); if (!c) return;
+  c.requires.mode = mode === 'any' ? 'any' : 'all';
+}
+function ebAddCardCond(id) {
+  const sel = $('#eb-cond-card'); if (!sel || !sel.value) return;
+  const c = ebCardById(id); if (!c) return;
+  c.requires.conditions.push({ type: 'card_done', card_id: sel.value });
+  ebCardModal(id);
+}
+function ebAddCodeCond(id) {
+  const inp = $('#eb-cond-code'); if (!inp || !inp.value.trim()) return;
+  const c = ebCardById(id); if (!c) return;
+  c.requires.conditions.push({ type: 'code', code: inp.value.trim().toUpperCase() });
+  ebCardModal(id);
+}
+function ebRemoveCond(id, idx) {
+  const c = ebCardById(id); if (!c) return;
+  c.requires.conditions.splice(idx, 1);
+  ebCardModal(id);
+}
+function ebSetIbField(id, field, value) {
+  const c = ebCardById(id); if (!c) return;
+  if (['active_codes', 'correct_codes'].includes(field)) {
+    c.ib[field] = value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  } else if (['place_count', 'points_correct', 'points_wrong'].includes(field)) {
+    c.ib[field] = parseInt(value, 10) || 0;
+  } else {
+    c.ib[field] = value;
+  }
+}
 
-  const cardChecks = cards.length
-    ? cards.map(c => `<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" class="eb-reveal" value="${c.id}" ${(step.reveal_card_ids || []).includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.title || c.id)}</label>`).join('')
-    : '<div class="muted" style="font-size:12px;">Ingen kort i biblioteket ennå.</div>';
+function ebCardModal(id) {
+  const c = ebCardById(id); if (!c) return;
+  const others = ebb.config.cards.filter(x => x.id !== id);
 
-  const mgOptions = `<option value="">— ingen —</option>` + mgs.map(m => `<option value="${m.id}" ${step.unlock_minigame_id === m.id ? 'selected' : ''}>${escapeHtml(m.title || m.id)}</option>`).join('');
+  const condRows = (c.requires.conditions || []).map((cond, i) => {
+    const label = cond.type === 'card_done'
+      ? `«${escapeHtml((ebCardById(cond.card_id) || {}).title || 'slettet kort')}» utført`
+      : `kode ${escapeHtml(cond.code)}`;
+    return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:4px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
+  }).join('') || '<div class="muted" style="font-size:12px;">Ingen betingelser — vises fra start.</div>';
+
+  const contentSection = c.surface === 'ib' ? ebIbFields(c) : ebBlocksSection(c);
 
   openModal({
-    title: isNew ? 'Nytt steg' : 'Rediger steg',
+    title: c.surface === 'ib' ? 'IB-runde' : 'Kort',
     size: 'lg',
     body: `
       <div class="field-row">
+        <div class="field"><label class="field-label">Tittel</label><input type="text" value="${escapeHtml(c.title)}" onchange="ebSetCardField('${id}','title',this.value)"></div>
         <div class="field"><label class="field-label">Type</label>
-          <select id="eb-step-type" onchange="ebStepTypeToggle(this.value)">${typeOptions}</select></div>
-        <div class="field"><label class="field-label">Tittel</label><input id="eb-step-title" type="text" value="${escapeHtml(step.title)}"></div>
-      </div>
-      <div class="field"><label class="field-label">Tekst / oppgave</label><textarea id="eb-step-body" rows="3">${escapeHtml(step.body)}</textarea></div>
-      <div class="field"><label class="field-label">Media-URL (valgfritt)</label><input id="eb-step-media" type="text" value="${escapeHtml(step.media_url || '')}" placeholder="https://…"></div>
-
-      <div id="eb-step-password-fields" style="display:${step.type === 'password' ? 'block' : 'none'};">
-        <div class="field-row">
-          <div class="field"><label class="field-label">Passord (kode)</label><input id="eb-step-password" type="text" value="${escapeHtml(step.password || '')}" class="col-mono" placeholder="1234"></div>
-          <div class="field"><label class="field-label">Poeng</label><input id="eb-step-points" type="number" min="0" value="${step.points || 0}"></div>
+          <select onchange="ebSetCardSurface('${id}',this.value)">
+            <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Arbeidsområde-kort</option>
+            <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board-runde</option>
+          </select>
         </div>
-        <div class="field"><label class="field-label">Avslører kort</label><div style="display:flex;flex-direction:column;gap:6px;max-height:170px;overflow:auto;padding:6px;border:1px solid var(--bg3);border-radius:6px;">${cardChecks}</div></div>
+      </div>
+      ${c.surface !== 'ib' ? `<div class="field"><label class="field-label">Fysisk kode (valgfritt)</label><input type="text" maxlength="6" value="${escapeHtml(c.code)}" class="col-mono" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Sett kode hvis kortet er et fysisk kort.</span></div>` : ''}
+
+      <div class="panel" style="margin-top:14px;">
+        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Vises når
+          <span class="ph-spacer"></span>
+          <select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;">
+            <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>Alle betingelser</option>
+            <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>Minst én betingelse</option>
+          </select>
+        </div>
+        <div class="panel-body">
+          ${condRows}
+          <div class="field-row" style="margin-top:10px;align-items:flex-end;">
+            <div class="field"><label class="field-label">Krev at kort er utført</label>
+              <select id="eb-cond-card"><option value="">— velg kort —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(o.title || o.id)}</option>`).join('')}</select>
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Legg til</button>
+          </div>
+          <div class="field-row" style="align-items:flex-end;">
+            <div class="field"><label class="field-label">Krev kode tastet</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
+            <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Legg til</button>
+          </div>
+        </div>
       </div>
 
-      <div id="eb-step-minigame-fields" style="display:${step.type === 'minigame' ? 'block' : 'none'};">
-        <div class="field"><label class="field-label">Minispill</label><select id="eb-step-minigame">${mgOptions}</select></div>
+      ${contentSection}
+    `,
+    footer: `<button class="btn" onclick="ebCloseCardModal()">Ferdig</button>`,
+  });
+}
+
+function ebCloseCardModal() { closeModal(); renderEbBuilder(); }
+
+function ebBlocksSection(c) {
+  const rows = (c.blocks || []).map((b, i) => {
+    let summary = '';
+    if (b.type === 'info') summary = escapeHtml((b.text || '').slice(0, 50));
+    else if (b.type === 'question') summary = escapeHtml((b.prompt || '').slice(0, 50));
+    else if (b.type === 'unlock') summary = 'Åpne fysiske kort: ' + escapeHtml((b.physical_codes || []).join(', '));
+    return `<tr><td style="width:120px;"><span class="badge dark">${({info:'Info',question:'Spørsmål',unlock:'Åpne kort'})[b.type] || b.type}</span></td>
+      <td><span class="muted" style="font-size:13px;">${summary}</span></td>
+      <td class="col-actions" style="width:130px;"><button class="btn btn-sm" onclick="ebBlockModal('${c.id}',${i})">Rediger</button><button class="btn btn-sm btn-danger" onclick="ebDeleteBlock('${c.id}',${i})">Slett</button></td></tr>`;
+  }).join('');
+  return `
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▤</span> Innhold (blokker)
+        <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','info')">+ Info</button>
+        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','question')">+ Spørsmål</button>
+        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','unlock')">+ Åpne kort</button>
       </div>
-    `,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre steg</button>`,
-    onSubmit: () => {
-      const type = $('#eb-step-type').value;
-      const updated = {
-        id: step.id,
-        type,
-        title: $('#eb-step-title').value.trim(),
-        body: $('#eb-step-body').value.trim(),
-        media_url: $('#eb-step-media').value.trim(),
-        password: type === 'password' ? $('#eb-step-password').value.trim() : '',
-        points: type === 'password' ? (parseInt($('#eb-step-points').value, 10) || 0) : 0,
-        reveal_card_ids: type === 'password' ? $$('.eb-reveal').filter(x => x.checked).map(x => x.value) : [],
-        unlock_minigame_id: type === 'minigame' ? $('#eb-step-minigame').value : '',
-      };
-      if (isNew) ebb.config.flow[si].steps.push(updated);
-      else ebb.config.flow[si].steps[ti] = updated;
-      closeModal(); renderEbBuilder();
-    },
-  });
+      <div class="panel-body tight">
+        ${rows ? `<table class="data-table"><tbody>${rows}</tbody></table>` : '<div class="muted" style="padding:10px;">Ingen blokker ennå.</div>'}
+      </div>
+    </div>`;
 }
 
-function ebStepTypeToggle(type) {
-  const pw = $('#eb-step-password-fields');
-  const mg = $('#eb-step-minigame-fields');
-  if (pw) pw.style.display = type === 'password' ? 'block' : 'none';
-  if (mg) mg.style.display = type === 'minigame' ? 'block' : 'none';
+function ebIbFields(c) {
+  const ib = c.ib;
+  return `
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▦</span> Investigation Board-runde</div>
+      <div class="panel-body">
+        <div class="field"><label class="field-label">Introtekst (vises i IB-kolonnen)</label><textarea rows="2" onchange="ebSetIbField('${c.id}','intro_text',this.value)">${escapeHtml(ib.intro_text || '')}</textarea></div>
+        <div class="field"><label class="field-label">Aktive koder (kommaseparert — kortene som er i spill)</label><input type="text" class="col-mono" value="${escapeHtml((ib.active_codes || []).join(', '))}" onchange="ebSetIbField('${c.id}','active_codes',this.value)"></div>
+        <div class="field-row">
+          <div class="field"><label class="field-label">Antall som skal plasseres</label><input type="number" min="0" value="${ib.place_count || 0}" onchange="ebSetIbField('${c.id}','place_count',this.value)"></div>
+          <div class="field"><label class="field-label">Riktige koder (kommaseparert)</label><input type="text" class="col-mono" value="${escapeHtml((ib.correct_codes || []).join(', '))}" onchange="ebSetIbField('${c.id}','correct_codes',this.value)"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label class="field-label">Poeng ved riktig</label><input type="number" value="${ib.points_correct || 0}" onchange="ebSetIbField('${c.id}','points_correct',this.value)"></div>
+          <div class="field"><label class="field-label">Poeng ved feil (minus)</label><input type="number" value="${ib.points_wrong || 0}" onchange="ebSetIbField('${c.id}','points_wrong',this.value)"></div>
+        </div>
+        <div class="field"><label class="field-label">Beskjed om hvilke som legges til side (discard)</label><input type="text" value="${escapeHtml(ib.discard_hint || '')}" onchange="ebSetIbField('${c.id}','discard_hint',this.value)"></div>
+        <div class="field"><label class="field-label">Suksesstekst (vises når runden er løst)</label><textarea rows="2" onchange="ebSetIbField('${c.id}','success_text',this.value)">${escapeHtml(ib.success_text || '')}</textarea></div>
+      </div>
+    </div>`;
 }
 
-function ebCardModal(ci) {
-  const isNew = ci === null || ci === undefined;
-  const card = isNew ? { id: ebUid('card'), title: '', image_url: '', body: '' } : ebb.config.cards[ci];
+/* ─── Blokker ───────────────────────────────────────────── */
+function ebAddBlock(cardId, type) {
+  const c = ebCardById(cardId); if (!c) return;
+  const base = { id: ebUid('blk'), type };
+  if (type === 'info') Object.assign(base, { text: '', media_url: '' });
+  else if (type === 'question') Object.assign(base, { prompt: '', options: [], points: 0 });
+  else if (type === 'unlock') Object.assign(base, { text: '', physical_codes: [] });
+  c.blocks.push(base);
+  ebBlockModal(cardId, c.blocks.length - 1);
+}
+function ebDeleteBlock(cardId, idx) {
+  const c = ebCardById(cardId); if (!c) return;
+  c.blocks.splice(idx, 1);
+  ebCardModal(cardId);
+}
+function ebBlockModal(cardId, idx) {
+  const c = ebCardById(cardId); if (!c) return;
+  const b = c.blocks[idx]; if (!b) return;
+  let fields = '';
+  if (b.type === 'info') {
+    fields = `
+      <div class="field"><label class="field-label">Tekst</label><textarea id="eb-blk-text" rows="4">${escapeHtml(b.text || '')}</textarea></div>
+      <div class="field"><label class="field-label">Media-URL (valgfritt)</label><input id="eb-blk-media" type="text" value="${escapeHtml(b.media_url || '')}" placeholder="https://…"></div>`;
+  } else if (b.type === 'question') {
+    const optText = (b.options || []).map(o => (o.correct ? '*' : '') + (o.text || '')).join('\n');
+    fields = `
+      <div class="field"><label class="field-label">Spørsmål</label><textarea id="eb-blk-prompt" rows="2">${escapeHtml(b.prompt || '')}</textarea></div>
+      <div class="field"><label class="field-label">Svaralternativer (ett per linje, * foran riktig)</label><textarea id="eb-blk-options" rows="5" placeholder="*Riktig svar&#10;Galt svar&#10;Galt svar">${escapeHtml(optText)}</textarea></div>
+      <div class="field"><label class="field-label">Poeng ved riktig</label><input id="eb-blk-points" type="number" value="${b.points || 0}"></div>`;
+  } else if (b.type === 'unlock') {
+    fields = `
+      <div class="field"><label class="field-label">Tekst</label><input id="eb-blk-text" type="text" value="${escapeHtml(b.text || '')}" placeholder="Åpne følgende fysiske kort:"></div>
+      <div class="field"><label class="field-label">Fysiske koder (kommaseparert)</label><input id="eb-blk-codes" type="text" class="col-mono" value="${escapeHtml((b.physical_codes || []).join(', '))}"></div>`;
+  }
   openModal({
-    title: isNew ? 'Nytt kort' : 'Rediger kort',
-    body: `
-      <div class="field"><label class="field-label">Tittel</label><input id="eb-card-title" type="text" value="${escapeHtml(card.title)}"></div>
-      <div class="field"><label class="field-label">Tekst</label><textarea id="eb-card-body" rows="3">${escapeHtml(card.body)}</textarea></div>
-      <div class="field"><label class="field-label">Bilde-URL (valgfritt)</label><input id="eb-card-image" type="text" value="${escapeHtml(card.image_url)}" placeholder="https://…">
-        <span class="field-hint">Opplasting via Dropbox kobles på i bilde-sporet.</span></div>
-    `,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre kort</button>`,
-    onSubmit: () => {
-      const updated = { id: card.id, title: $('#eb-card-title').value.trim(), body: $('#eb-card-body').value.trim(), image_url: $('#eb-card-image').value.trim() };
-      if (isNew) ebb.config.cards.push(updated);
-      else ebb.config.cards[ci] = updated;
-      closeModal(); renderEbBuilder();
-    },
+    title: ({ info: 'Info-blokk', question: 'Spørsmål-blokk', unlock: 'Åpne kort-blokk' })[b.type],
+    body: fields,
+    footer: `<button class="btn btn-secondary" onclick="ebCardModal('${cardId}')">Avbryt</button><button class="btn" onclick="ebSaveBlock('${cardId}',${idx})">Lagre blokk</button>`,
   });
 }
-
-function ebDeleteCard(ci) {
-  const card = ebb.config.cards[ci];
-  // Fjern referanser fra steg
-  ebb.config.flow.forEach(st => (st.steps || []).forEach(s => {
-    if (Array.isArray(s.reveal_card_ids)) s.reveal_card_ids = s.reveal_card_ids.filter(id => id !== card.id);
-  }));
-  ebb.config.cards.splice(ci, 1);
-  renderEbBuilder();
-}
-
-function ebMinigameModal(mi) {
-  const isNew = mi === null || mi === undefined;
-  const mg = isNew ? { id: ebUid('mg'), title: '', type: '' } : ebb.config.minigames[mi];
-  openModal({
-    title: isNew ? 'Nytt minispill' : 'Rediger minispill',
-    body: `
-      <div class="field"><label class="field-label">Tittel</label><input id="eb-mg-title" type="text" value="${escapeHtml(mg.title)}"></div>
-      <div class="field"><label class="field-label">Type / nøkkel</label><input id="eb-mg-type" type="text" value="${escapeHtml(mg.type)}" class="col-mono" placeholder="f.eks. puzzle, cipher">
-        <span class="field-hint">Selve minispill-implementasjonen kobles på senere.</span></div>
-    `,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre</button>`,
-    onSubmit: () => {
-      const updated = { id: mg.id, title: $('#eb-mg-title').value.trim(), type: $('#eb-mg-type').value.trim() };
-      if (isNew) ebb.config.minigames.push(updated);
-      else ebb.config.minigames[mi] = updated;
-      closeModal(); renderEbBuilder();
-    },
-  });
-}
-
-function ebDeleteMinigame(mi) {
-  const mg = ebb.config.minigames[mi];
-  ebb.config.flow.forEach(st => (st.steps || []).forEach(s => { if (s.unlock_minigame_id === mg.id) s.unlock_minigame_id = ''; }));
-  ebb.config.minigames.splice(mi, 1);
-  renderEbBuilder();
+function ebSaveBlock(cardId, idx) {
+  const c = ebCardById(cardId); if (!c) return;
+  const b = c.blocks[idx]; if (!b) return;
+  if (b.type === 'info') {
+    b.text = $('#eb-blk-text').value.trim();
+    b.media_url = $('#eb-blk-media').value.trim();
+  } else if (b.type === 'question') {
+    b.prompt = $('#eb-blk-prompt').value.trim();
+    b.options = $('#eb-blk-options').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+      const correct = l.startsWith('*');
+      return { text: correct ? l.slice(1).trim() : l, correct };
+    });
+    b.points = parseInt($('#eb-blk-points').value, 10) || 0;
+  } else if (b.type === 'unlock') {
+    b.text = $('#eb-blk-text').value.trim();
+    b.physical_codes = $('#eb-blk-codes').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  }
+  ebCardModal(cardId);
 }
 
 async function ebSaveAll() {
   try {
     await api(`/api/concepts/${ebb.conceptId}`, { method: 'PATCH', body: { config: ebb.config } });
-    showToast('Spillflyt lagret', 'success');
+    showToast('Lagret', 'success');
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-/* ════════════════════════════════════════════════════════
-   DELTAGER-FORHÅNDSVISNING (testmodus, inne i byggeren)
-   ────────────────────────────────────────────────────────
-   Spiller flyten klient-side fra ebb.config (snapshot), uten
-   backend. Liggende nettbrett-ramme. Den endelige deltager-
-   løsningen (play.html) gjenbruker samme flyt-logikk.
-   ──────────────────────────────────────────────────────── */
-let ebPreviewState = null;
-
-function ebOpenPreview() {
-  if (!ebb) return;
-  const cfg = JSON.parse(JSON.stringify(ebb.config));
-  const limit = ebb.concept.time_limit_seconds || 3600;
-  ebPreviewState = {
-    cfg, limit,
-    stageIndex: -1,
-    done: false,
-    completed: new Set(),
-    revealed: new Set(),
-    score: 0,
-    timeLeft: limit,
-    timer: null,
-    cardsOpen: false,
-  };
-  let ov = document.getElementById('eb-preview-overlay');
-  if (!ov) {
-    ov = document.createElement('div');
-    ov.id = 'eb-preview-overlay';
-    document.body.appendChild(ov);
-  }
-  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(4,7,14,0.93);display:flex;align-items:center;justify-content:center;padding:16px;';
-  ebPreviewRender();
-}
-
-function ebPvClose() {
-  if (ebPreviewState && ebPreviewState.timer) clearInterval(ebPreviewState.timer);
-  const ov = document.getElementById('eb-preview-overlay');
-  if (ov) ov.remove();
-  ebPreviewState = null;
-}
-
-function ebPvFmt(s) {
-  s = Math.max(0, Math.floor(s));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function ebPvStartTimer() {
-  const st = ebPreviewState;
-  if (!st || st.timer) return;
-  st.timer = setInterval(() => {
-    if (!ebPreviewState) return;
-    ebPreviewState.timeLeft -= 1;
-    const el = document.getElementById('eb-pv-time');
-    if (el) el.textContent = ebPvFmt(ebPreviewState.timeLeft);
-    if (ebPreviewState.timeLeft <= 0) { clearInterval(ebPreviewState.timer); ebPreviewState.timer = null; }
-  }, 1000);
-}
-
-function ebPvStart() {
-  ebPreviewState.stageIndex = 0;
-  ebPvStartTimer();
-  ebPreviewRender();
-}
-
-function ebPvCompleteStep(stepId) {
-  ebPreviewState.completed.add(stepId);
-  ebPreviewRender();
-}
-
-function ebPvCheckPassword(stepId) {
-  const st = ebPreviewState;
-  const stage = st.cfg.flow[st.stageIndex];
-  const step = stage && stage.steps.find(s => s.id === stepId);
-  if (!step) return;
-  const input = document.getElementById(`eb-pv-pw-${stepId}`);
-  const val = (input ? input.value : '').trim().toLowerCase();
-  if (val && val === String(step.password || '').trim().toLowerCase()) {
-    if (!st.completed.has(stepId)) {
-      st.completed.add(stepId);
-      st.score += step.points || 0;
-      (step.reveal_card_ids || []).forEach(id => st.revealed.add(id));
-    }
-    ebPreviewRender();
-  } else {
-    showToast('Feil kode', 'error');
-    if (input) { input.value = ''; input.focus(); }
-  }
-}
-
-function ebPvAdvance() {
-  const st = ebPreviewState;
-  const stage = st.cfg.flow[st.stageIndex];
-  if (!stage || !stage.steps.every(s => st.completed.has(s.id))) return;
-  st.stageIndex += 1;
-  if (st.stageIndex >= st.cfg.flow.length) {
-    st.done = true;
-    if (st.timer) { clearInterval(st.timer); st.timer = null; }
-  }
-  ebPreviewRender();
-}
-
-function ebPvToggleCards() {
-  ebPreviewState.cardsOpen = !ebPreviewState.cardsOpen;
-  ebPreviewRender();
-}
-
-function ebPvReplay() { ebOpenPreview(); }
-
-/* ─── Render ─────────────────────────────────────────────── */
-function ebPreviewRender() {
-  const ov = document.getElementById('eb-preview-overlay');
-  const st = ebPreviewState;
-  if (!ov || !st) return;
-  const cfg = st.cfg;
-  const showScore = cfg.settings && cfg.settings.show_score !== false;
-  const showTimer = cfg.settings && cfg.settings.time_limit_enabled !== false;
-
-  const topbar = `
-    <div style="flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:10px 16px;background:rgba(0,0,0,0.35);border-bottom:1px solid rgba(86,204,242,0.25);">
-      <span style="font-size:11px;letter-spacing:0.18em;color:#56ccf2;text-transform:uppercase;">Testmodus</span>
-      <span style="flex:1;"></span>
-      ${showTimer ? `<span style="font-family:monospace;font-size:18px;color:#ffd166;" id="eb-pv-time">${ebPvFmt(st.timeLeft)}</span>` : ''}
-      ${showScore ? `<span style="font-family:monospace;font-size:16px;color:#9fe;">${st.score} p</span>` : ''}
-      <button onclick="ebPvToggleCards()" style="${ebPvBtn('ghost')}">Kort (${st.revealed.size})</button>
-    </div>`;
-
-  let body;
-  if (st.cardsOpen) {
-    body = ebPvCardsScreen();
-  } else if (st.stageIndex < 0) {
-    body = ebPvIntroScreen();
-  } else if (st.done || st.stageIndex >= cfg.flow.length) {
-    body = ebPvDoneScreen();
-  } else {
-    body = ebPvStageScreen();
-  }
-
-  ov.innerHTML = `
-    <button onclick="ebPvClose()" title="Lukk" style="position:absolute;top:14px;right:18px;background:none;border:none;color:#aeb8c8;font-size:26px;cursor:pointer;">✕</button>
-    <div style="width:min(1100px,96vw);aspect-ratio:4/3;max-height:90vh;background:#0a0e1a;border:14px solid #05070e;border-radius:26px;box-shadow:0 30px 80px rgba(0,0,0,0.6);overflow:hidden;display:flex;flex-direction:column;">
-      <div style="flex:1;display:flex;flex-direction:column;background:radial-gradient(120% 120% at 50% 0%, #122036 0%, #0a1322 60%, #070d18 100%);color:#e6edf6;font-family:system-ui,-apple-system,sans-serif;overflow:hidden;">
-        ${topbar}
-        <div id="eb-pv-screen" style="flex:1;overflow:auto;padding:26px 30px;">${body}</div>
-      </div>
-    </div>
-  `;
-}
-
-function ebPvBtn(kind) {
-  if (kind === 'ghost') return 'background:rgba(86,204,242,0.12);border:1px solid rgba(86,204,242,0.4);color:#9fe;padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;';
-  if (kind === 'amber') return 'background:#ffd166;border:none;color:#1a1400;padding:11px 22px;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;';
-  return 'background:#56ccf2;border:none;color:#04121c;padding:11px 22px;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;';
-}
-
-function ebPvMedia(url) {
-  if (!url) return '';
-  return `<img src="${escapeHtml(url)}" style="max-width:100%;max-height:240px;border-radius:10px;margin:14px 0;border:1px solid rgba(255,255,255,0.1);">`;
-}
-
-function ebPvIntroScreen() {
-  const cfg = ebPreviewState.cfg;
-  if (cfg.flow.length === 0) {
-    return `<div style="text-align:center;padding-top:40px;color:#aeb8c8;">Ingen steg bygget ennå. Legg til steg i Spillflyt-fanen først.</div>`;
-  }
-  return `
-    <div style="max-width:680px;margin:0 auto;text-align:center;padding-top:18px;">
-      <div style="font-size:12px;letter-spacing:0.2em;color:#56ccf2;text-transform:uppercase;">${escapeHtml(ebb.concept.name)}</div>
-      <h1 style="font-size:32px;margin:12px 0;">${escapeHtml(cfg.intro.title || 'Velkommen')}</h1>
-      ${ebPvMedia(cfg.intro.media_url)}
-      <p style="color:#c4cfdd;line-height:1.6;white-space:pre-wrap;">${escapeHtml(cfg.intro.body || '')}</p>
-      <button onclick="ebPvStart()" style="${ebPvBtn('primary')};margin-top:22px;">▶ Start oppdraget</button>
-    </div>`;
-}
-
-function ebPvStageScreen() {
-  const st = ebPreviewState;
-  const cfg = st.cfg;
-  const stage = cfg.flow[st.stageIndex];
-  const isParallel = stage.mode === 'parallel';
-  const allDone = stage.steps.every(s => st.completed.has(s.id));
-
-  const header = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
-      <span style="font-size:12px;letter-spacing:0.18em;color:#56ccf2;text-transform:uppercase;">Steg ${st.stageIndex + 1} / ${cfg.flow.length}</span>
-      ${isParallel ? `<span style="font-size:11px;background:rgba(255,209,102,0.15);color:#ffd166;border:1px solid rgba(255,209,102,0.4);padding:2px 8px;border-radius:20px;">Fullfør alle ${stage.steps.length}</span>` : ''}
-    </div>`;
-
-  const steps = stage.steps.map(step => ebPvStepCard(step)).join('');
-
-  const next = allDone
-    ? `<div style="text-align:center;margin-top:22px;"><button onclick="ebPvAdvance()" style="${ebPvBtn('amber')}">${st.stageIndex + 1 >= cfg.flow.length ? 'Fullfør ▸' : 'Neste ▸'}</button></div>`
-    : '';
-
-  return `<div style="max-width:760px;margin:0 auto;">${header}${steps}${next}</div>`;
-}
-
-function ebPvStepCard(step) {
-  const st = ebPreviewState;
-  const done = st.completed.has(step.id);
-  const border = done ? 'rgba(111,207,151,0.5)' : 'rgba(255,255,255,0.12)';
-  let inner = `
-    <div style="display:flex;align-items:center;gap:10px;">
-      <h3 style="margin:0;font-size:18px;">${escapeHtml(step.title || '(uten tittel)')}</h3>
-      ${done ? '<span style="color:#6fcf97;font-size:14px;">✓ Fullført</span>' : ''}
-    </div>
-    ${ebPvMedia(step.media_url)}
-    ${step.body ? `<p style="color:#c4cfdd;line-height:1.6;white-space:pre-wrap;margin:10px 0;">${escapeHtml(step.body)}</p>` : ''}`;
-
-  if (step.type === 'password') {
-    if (done) {
-      const cards = (step.reveal_card_ids || []).map(id => {
-        const c = (st.cfg.cards || []).find(x => x.id === id);
-        return c ? ebPvCardMini(c) : '';
-      }).join('');
-      inner += cards ? `<div style="margin-top:10px;"><div style="font-size:12px;color:#56ccf2;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">Avdekket</div><div style="display:flex;flex-wrap:wrap;gap:10px;">${cards}</div></div>` : '';
-    } else {
-      inner += `
-        <div style="display:flex;gap:10px;margin-top:8px;">
-          <input id="eb-pv-pw-${step.id}" type="text" inputmode="latin" placeholder="Skriv kode…" style="flex:1;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.4);color:#e6edf6;padding:11px 14px;border-radius:10px;font-family:monospace;font-size:16px;">
-          <button onclick="ebPvCheckPassword('${step.id}')" style="${ebPvBtn('primary')}">Lås opp</button>
-        </div>`;
-    }
-  } else if (step.type === 'minigame') {
-    const mg = (st.cfg.minigames || []).find(m => m.id === step.unlock_minigame_id);
-    inner += `<div style="margin-top:8px;padding:12px;background:rgba(0,0,0,0.25);border-radius:10px;color:#aeb8c8;font-size:13px;">Minispill: <strong>${escapeHtml(mg ? mg.title : '(ikke valgt)')}</strong> — implementeres senere.</div>`;
-    if (!done) inner += `<div style="margin-top:10px;"><button onclick="ebPvCompleteStep('${step.id}')" style="${ebPvBtn('ghost')}">Marker som fullført (test)</button></div>`;
-  } else {
-    if (!done) inner += `<div style="margin-top:10px;"><button onclick="ebPvCompleteStep('${step.id}')" style="${ebPvBtn('primary')}">Fortsett ▸</button></div>`;
-  }
-
-  return `<div style="background:rgba(255,255,255,0.03);border:1px solid ${border};border-radius:14px;padding:18px 20px;margin-bottom:14px;">${inner}</div>`;
-}
-
-function ebPvCardMini(c) {
-  return `
-    <div style="width:140px;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.3);border-radius:10px;overflow:hidden;">
-      ${c.image_url ? `<img src="${escapeHtml(c.image_url)}" style="width:100%;height:84px;object-fit:cover;">` : ''}
-      <div style="padding:8px 10px;"><div style="font-size:13px;font-weight:600;">${escapeHtml(c.title || '')}</div></div>
-    </div>`;
-}
-
-function ebPvCardsScreen() {
-  const st = ebPreviewState;
-  const cards = Array.from(st.revealed).map(id => (st.cfg.cards || []).find(c => c.id === id)).filter(Boolean);
-  const list = cards.length === 0
-    ? `<div style="color:#aeb8c8;text-align:center;padding-top:30px;">Ingen kort avdekket ennå.</div>`
-    : `<div style="display:flex;flex-wrap:wrap;gap:14px;">${cards.map(c => `
-        <div style="width:220px;background:rgba(0,0,0,0.3);border:1px solid rgba(86,204,242,0.3);border-radius:12px;overflow:hidden;">
-          ${c.image_url ? `<img src="${escapeHtml(c.image_url)}" style="width:100%;height:130px;object-fit:cover;">` : ''}
-          <div style="padding:12px 14px;"><div style="font-weight:600;margin-bottom:6px;">${escapeHtml(c.title || '')}</div><div style="font-size:13px;color:#c4cfdd;white-space:pre-wrap;">${escapeHtml(c.body || '')}</div></div>
-        </div>`).join('')}</div>`;
-  return `
-    <div style="max-width:780px;margin:0 auto;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-        <h2 style="margin:0;font-size:22px;">Innhentede kort</h2>
-        <button onclick="ebPvToggleCards()" style="${ebPvBtn('ghost')}">← Tilbake</button>
-      </div>
-      ${list}
-    </div>`;
-}
-
-function ebPvDoneScreen() {
-  const st = ebPreviewState;
-  const showScore = st.cfg.settings && st.cfg.settings.show_score !== false;
-  return `
-    <div style="max-width:620px;margin:0 auto;text-align:center;padding-top:36px;">
-      <div style="font-size:48px;">✓</div>
-      <h1 style="font-size:30px;margin:12px 0;">Alle steg fullført</h1>
-      ${showScore ? `<div style="font-family:monospace;font-size:22px;color:#9fe;margin:10px 0;">${st.score} poeng</div>` : ''}
-      <p style="color:#aeb8c8;line-height:1.6;">Finalen (lagnummer, navn, portrett og bolig) bygges i bolk 3 og kommer her.</p>
-      <div style="margin-top:22px;display:flex;gap:12px;justify-content:center;">
-        <button onclick="ebPvReplay()" style="${ebPvBtn('ghost')}">↺ Spill på nytt</button>
-        <button onclick="ebPvClose()" style="${ebPvBtn('primary')}">Avslutt test</button>
-      </div>
-    </div>`;
-}
 
 
 /* ════════════════════════════════════════════════════════
