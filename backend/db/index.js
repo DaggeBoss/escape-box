@@ -12,12 +12,12 @@ pool.on('error', (err) => {
   console.error('PostgreSQL pool error:', err);
 });
 
-// ─── Default scenario_data-struktur ────────────────────────
-// Erstatter det gamle koordinat/grid/anker-baserte systemet.
-// Spillet drives nå av passord (4-sifret kode) som hver kan trigge
-// poeng + kort + minispill + filer i en fiktiv server. Se README for
-// full spesifikasjon.
-const DEFAULT_SCENARIO_DATA = {
+// ─── Default config for Escape Box-konseptet ───────────────
+// Hvert konsept har sin egen config-struktur (redigeres via sin egen
+// skreddersydde bygger). Dette er default for escape_box. Andre konsepter
+// får sin egen struktur når de bygges — concepts-tabellen lagrer config
+// som rå JSONB og forutsetter ingen bestemt form.
+const DEFAULT_CONCEPT_CONFIG = {
   passwords: [],
   cards: [],
   minigames: [],
@@ -33,11 +33,14 @@ const DEFAULT_SCENARIO_DATA = {
   },
 };
 
+// Bakoverkompatibelt alias (eldre kode kan importere DEFAULT_SCENARIO_DATA)
+const DEFAULT_SCENARIO_DATA = DEFAULT_CONCEPT_CONFIG;
+
 // Idempotente migrasjoner i individuelle try/catch (samme mønster som BME Portal)
 async function initDatabase() {
   console.log('🔧 Initialiserer database...');
 
-  // Organisations (bedrifter)
+  // ─── Organisasjoner (bedrifter) ─────────────────────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS organizations (
@@ -50,10 +53,7 @@ async function initDatabase() {
     console.log('  ✓ organizations');
   } catch (e) { console.error('  ✗ organizations:', e.message); }
 
-  // Users (alle admin-brukere — superadmin, org_admin, gamemaster)
-  // 'participant'-rollen i constraint beholdes inntil videre for
-  // bakoverkompatibilitet; nye deltagere lagres i participants-tabellen
-  // (kommer i sesjon 4) — ikke i users.
+  // ─── Brukere ────────────────────────────────────────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -71,87 +71,116 @@ async function initDatabase() {
     console.log('  ✓ users');
   } catch (e) { console.error('  ✗ users:', e.message); }
 
-  // Scenarios (scenariobiblioteket — superadmin eier alle)
+  // ─── KONSEPTER ──────────────────────────────────────────
+  // Erstatter scenarios. Ingen "type" — hvert konsept er sin egen enhet,
+  // identifisert med en stabil `key` som peker til hardkodet motor + bygger.
+  // Redigerbart innhold ligger i `config` (JSONB, fri form per konsept).
+
+  // 1) Legacy: omdøp gammel scenarios-tabell -> concepts (kun hvis nødvendig)
   try {
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS scenarios (
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'scenarios')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'concepts') THEN
+          ALTER TABLE scenarios RENAME TO concepts;
+        END IF;
+      END $$;
+    `);
+  } catch (e) { console.error('  ✗ rename scenarios->concepts:', e.message); }
+
+  // 2) Opprett concepts (fersk DB) — no-op hvis allerede omdøpt
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS concepts (
         id SERIAL PRIMARY KEY,
+        key VARCHAR(50),
         name VARCHAR(100) NOT NULL,
         description TEXT,
         time_limit_seconds INTEGER DEFAULT 3600,
+        config JSONB DEFAULT '{}'::jsonb,
         created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    console.log('  ✓ scenarios');
-  } catch (e) { console.error('  ✗ scenarios:', e.message); }
+    console.log('  ✓ concepts');
+  } catch (e) { console.error('  ✗ concepts:', e.message); }
 
-  // Utvid scenarios med scenario_data (JSONB med passord/kort/minispill/server)
+  // 3) Kolonne-normalisering: scenario_data -> config, samt sørg for key/config
   try {
     await pool.query(`
-      ALTER TABLE scenarios
-      ADD COLUMN IF NOT EXISTS scenario_data JSONB
-      DEFAULT '${JSON.stringify(DEFAULT_SCENARIO_DATA)}'::jsonb
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'concepts' AND column_name = 'scenario_data')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'concepts' AND column_name = 'config') THEN
+          ALTER TABLE concepts RENAME COLUMN scenario_data TO config;
+        END IF;
+      END $$;
     `);
-    console.log('  ✓ scenarios.scenario_data');
-  } catch (e) { console.error('  ✗ scenarios alter:', e.message); }
+    await pool.query(`ALTER TABLE concepts ADD COLUMN IF NOT EXISTS config JSONB DEFAULT '{}'::jsonb`);
+    await pool.query(`ALTER TABLE concepts ADD COLUMN IF NOT EXISTS key VARCHAR(50)`);
+    // Backfill key for rader uten (migrerte scenarier), og unik indeks
+    await pool.query(`UPDATE concepts SET key = 'concept_' || id WHERE key IS NULL OR key = ''`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_concepts_key ON concepts(key)`);
+    console.log('  ✓ concepts.config/key');
+  } catch (e) { console.error('  ✗ concepts kolonner:', e.message); }
 
-  // Migrasjon: konverter gamle scenario_data (koordinat-basert) til nytt
-  // skjema. Vi sjekker etter scenarios som har 'coordinates'-felt (gammel
-  // struktur) og setter dem til ny default. Eksisterende data går tapt —
-  // dette er avtalt i sesjon 1-planleggingen.
+  // ─── Concept access (lisens per bedrift × konsept) ──────
+  // license_type: 'free'  = ubegrenset, ingen credit-trekk
+  //               'credits' = trekker 1 credit når et event settes live
   try {
-    const { rows } = await pool.query(`
-      SELECT id, scenario_data FROM scenarios
-      WHERE scenario_data ? 'coordinates'
-         OR scenario_data ? 'grid'
-         OR scenario_data ? 'cards_template'
-         OR NOT (scenario_data ? 'passwords')
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS concept_access (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+        license_type VARCHAR(20) NOT NULL DEFAULT 'free',
+        credits_remaining INTEGER NOT NULL DEFAULT 0,
+        credits_granted INTEGER NOT NULL DEFAULT 0,
+        active BOOLEAN DEFAULT TRUE,
+        granted_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(organization_id, concept_id),
+        CONSTRAINT concept_access_license_check CHECK (license_type IN ('free', 'credits'))
+      )
     `);
-    if (rows.length > 0) {
-      console.log(`  ⟳ Migrerer ${rows.length} scenario(er) til nytt skjema...`);
-      for (const row of rows) {
-        // Bevar evt. eksisterende settings hvis kompatible
-        const oldSettings = row.scenario_data?.settings || {};
-        const newData = {
-          ...DEFAULT_SCENARIO_DATA,
-          settings: {
-            ...DEFAULT_SCENARIO_DATA.settings,
-            // Bare overfør innstillinger som finnes i nytt skjema
-            time_limit_enabled: oldSettings.time_limit_enabled !== false,
-            show_score: oldSettings.show_score !== false,
-          },
-        };
-        await pool.query(
-          'UPDATE scenarios SET scenario_data = $1 WHERE id = $2',
-          [JSON.stringify(newData), row.id]
-        );
-      }
-      console.log(`  ✓ ${rows.length} scenario(er) migrert`);
-    }
-  } catch (e) { console.error('  ✗ scenario-migrasjon:', e.message); }
+    console.log('  ✓ concept_access');
+  } catch (e) { console.error('  ✗ concept_access:', e.message); }
 
-  // Events (en bedrift kjører et event basert på et scenario)
+  // ─── Events ─────────────────────────────────────────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS events (
         id SERIAL PRIMARY KEY,
         organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
-        scenario_id INTEGER REFERENCES scenarios(id) ON DELETE SET NULL,
+        concept_id INTEGER REFERENCES concepts(id) ON DELETE SET NULL,
         name VARCHAR(150) NOT NULL,
         code VARCHAR(10) UNIQUE NOT NULL,
         scheduled_at TIMESTAMPTZ,
         status VARCHAR(20) DEFAULT 'planned',
+        credits_charged BOOLEAN DEFAULT FALSE,
         created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         CONSTRAINT events_status_check CHECK (status IN ('planned', 'live', 'finished', 'cancelled'))
       )
     `);
+    // Legacy: omdøp scenario_id -> concept_id, og sørg for credits_charged
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'scenario_id')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'concept_id') THEN
+          ALTER TABLE events RENAME COLUMN scenario_id TO concept_id;
+        END IF;
+      END $$;
+    `);
+    await pool.query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS credits_charged BOOLEAN DEFAULT FALSE`);
     console.log('  ✓ events');
   } catch (e) { console.error('  ✗ events:', e.message); }
 
-  // Teams (lag som tilhører et event)
+  // ─── Teams ──────────────────────────────────────────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS teams (
@@ -168,7 +197,7 @@ async function initDatabase() {
     console.log('  ✓ teams');
   } catch (e) { console.error('  ✗ teams:', e.message); }
 
-  // Sessions (selve spilløkten)
+  // ─── Sessions ───────────────────────────────────────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -189,7 +218,7 @@ async function initDatabase() {
     console.log('  ✓ sessions');
   } catch (e) { console.error('  ✗ sessions:', e.message); }
 
-  // Puzzle events (logg over alt som skjer i en sesjon)
+  // ─── Puzzle events (hendelseslogg / milepæler) ──────────
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puzzle_events (
@@ -204,18 +233,21 @@ async function initDatabase() {
     console.log('  ✓ puzzle_events');
   } catch (e) { console.error('  ✗ puzzle_events:', e.message); }
 
-  // Indekser for ytelse
+  // ─── Indekser ───────────────────────────────────────────
   try {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_org ON events(organization_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_concept ON events(concept_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_teams_event ON teams(event_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_team ON sessions(team_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_concept_access_org ON concept_access(organization_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_concept_access_concept ON concept_access(concept_id)`);
     console.log('  ✓ indekser');
   } catch (e) { console.error('  ✗ indekser:', e.message); }
 
-  // Seed: opprett superadmin hvis ingen finnes
+  // ─── Seed: superadmin ───────────────────────────────────
   try {
     const { rows } = await pool.query(`SELECT COUNT(*) FROM users WHERE role = 'superadmin'`);
     if (parseInt(rows[0].count, 10) === 0) {
@@ -232,7 +264,40 @@ async function initDatabase() {
     }
   } catch (e) { console.error('  ✗ superadmin seed:', e.message); }
 
+  // ─── Seed: egen bedrift for superadmin + escape_box-konsept ──
+  try {
+    const sa = await pool.query(
+      `SELECT id, organization_id FROM users WHERE role = 'superadmin' ORDER BY id ASC LIMIT 1`
+    );
+    if (sa.rows.length > 0) {
+      const superId = sa.rows[0].id;
+
+      // Egen bedrift (GameMaster) hvis superadmin mangler organisasjon
+      if (!sa.rows[0].organization_id) {
+        let org = await pool.query(`SELECT id FROM organizations WHERE slug = 'gamemaster' LIMIT 1`);
+        if (org.rows.length === 0) {
+          org = await pool.query(
+            `INSERT INTO organizations (name, slug) VALUES ('GameMaster', 'gamemaster') RETURNING id`
+          );
+          console.log('  ✓ Bedrift "GameMaster" opprettet for superadmin');
+        }
+        await pool.query(`UPDATE users SET organization_id = $1 WHERE id = $2`, [org.rows[0].id, superId]);
+      }
+
+      // Escape Box som første konsept
+      const ex = await pool.query(`SELECT id FROM concepts WHERE key = 'escape_box' LIMIT 1`);
+      if (ex.rows.length === 0) {
+        await pool.query(
+          `INSERT INTO concepts (key, name, description, time_limit_seconds, config, created_by_user_id, active)
+           VALUES ('escape_box', 'Escape Box', 'Passord-drevet escape room med kort og minispill', 3600, $1, $2, TRUE)`,
+          [JSON.stringify(DEFAULT_CONCEPT_CONFIG), superId]
+        );
+        console.log('  ✓ Konsept "Escape Box" seedet');
+      }
+    }
+  } catch (e) { console.error('  ✗ org/konsept seed:', e.message); }
+
   console.log('✅ Database klar');
 }
 
-module.exports = { pool, initDatabase, DEFAULT_SCENARIO_DATA };
+module.exports = { pool, initDatabase, DEFAULT_CONCEPT_CONFIG, DEFAULT_SCENARIO_DATA };

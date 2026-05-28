@@ -15,10 +15,10 @@ router.post('/start', async (req, res) => {
     if (!team_id) return res.status(400).json({ error: 'team_id påkrevd' });
 
     const teamRes = await pool.query(`
-      SELECT t.*, e.scenario_id, e.status AS event_status, s.time_limit_seconds, s.name AS scenario_name
+      SELECT t.*, e.concept_id, e.status AS event_status, c.time_limit_seconds, c.name AS scenario_name
       FROM teams t
       JOIN events e ON e.id = t.event_id
-      LEFT JOIN scenarios s ON s.id = e.scenario_id
+      LEFT JOIN concepts c ON c.id = e.concept_id
       WHERE t.id = $1
     `, [team_id]);
 

@@ -66,13 +66,15 @@ router.post('/team-login', async (req, res) => {
       return res.status(400).json({ error: 'event_code, team_code og pin påkrevd' });
     }
 
+    // c.* eksponeres som scenario_id/scenario_name for bakoverkompatibilitet
+    // (deltager-frontend leser disse i dag).
     const { rows } = await pool.query(`
       SELECT t.*, e.name AS event_name, e.status AS event_status,
-             e.code AS event_code, s.id AS scenario_id, s.name AS scenario_name,
-             s.time_limit_seconds
+             e.code AS event_code, c.id AS scenario_id, c.name AS scenario_name,
+             c.time_limit_seconds
       FROM teams t
       JOIN events e ON e.id = t.event_id
-      LEFT JOIN scenarios s ON s.id = e.scenario_id
+      LEFT JOIN concepts c ON c.id = e.concept_id
       WHERE LOWER(e.code) = LOWER($1) AND LOWER(t.code) = LOWER($2)
     `, [event_code.trim(), team_code.trim()]);
 
@@ -85,7 +87,6 @@ router.post('/team-login', async (req, res) => {
       return res.status(401).json({ error: 'Feil PIN' });
     }
 
-    // Returner et "team token" (forenklet — ikke JWT, bare lag-id som klient sender med)
     res.json({
       team: {
         id: team.id,
@@ -166,7 +167,6 @@ router.post('/update-profile', requireAuth, async (req, res) => {
     }
     if (email?.trim()) {
       const cleanEmail = email.trim().toLowerCase();
-      // Sjekk at eposten ikke er tatt av en annen
       const exists = await pool.query(
         'SELECT 1 FROM users WHERE LOWER(email) = $1 AND id != $2',
         [cleanEmail, req.user.id]
@@ -187,7 +187,6 @@ router.post('/update-profile', requireAuth, async (req, res) => {
       params
     );
 
-    // Returner ny user-objekt og signer nytt token (slik at klient kan oppdatere)
     const user = rows[0];
     const orgRes = user.organization_id
       ? await pool.query('SELECT name FROM organizations WHERE id = $1', [user.organization_id])

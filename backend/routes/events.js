@@ -15,16 +15,20 @@ router.get('/', requireAuth, async (req, res) => {
     const { user } = req;
     let query, params;
 
+    // MERK: c.name eksponeres som både concept_name og scenario_name
+    // (scenario_*-aliasene fjernes når frontend er omdøpt).
     const baseQuery = `
       SELECT e.*,
         o.name AS organization_name,
-        s.name AS scenario_name,
-        s.time_limit_seconds AS scenario_time_limit,
+        c.name AS concept_name,
+        c.name AS scenario_name,
+        c.time_limit_seconds AS concept_time_limit,
+        c.time_limit_seconds AS scenario_time_limit,
         u.name AS created_by_name,
         (SELECT COUNT(*) FROM teams WHERE event_id = e.id) AS team_count
       FROM events e
       LEFT JOIN organizations o ON o.id = e.organization_id
-      LEFT JOIN scenarios s ON s.id = e.scenario_id
+      LEFT JOIN concepts c ON c.id = e.concept_id
       LEFT JOIN users u ON u.id = e.created_by_user_id
     `;
 
@@ -50,12 +54,16 @@ router.get('/:id', requireAuth, async (req, res) => {
     const eventRes = await pool.query(`
       SELECT e.*,
         o.name AS organization_name,
-        s.name AS scenario_name,
-        s.description AS scenario_description,
-        s.time_limit_seconds AS scenario_time_limit
+        c.name AS concept_name,
+        c.name AS scenario_name,
+        c.description AS concept_description,
+        c.description AS scenario_description,
+        c.key AS concept_key,
+        c.time_limit_seconds AS concept_time_limit,
+        c.time_limit_seconds AS scenario_time_limit
       FROM events e
       LEFT JOIN organizations o ON o.id = e.organization_id
-      LEFT JOIN scenarios s ON s.id = e.scenario_id
+      LEFT JOIN concepts c ON c.id = e.concept_id
       WHERE e.id = $1
     `, [req.params.id]);
 
@@ -81,23 +89,37 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// Opprett event (org_admin og superadmin)
+// Opprett event (superadmin, org_admin og gamemaster)
 router.post('/', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
     const { user } = req;
-    if (!['superadmin', 'org_admin'].includes(user.role)) {
+    if (!['superadmin', 'org_admin', 'gamemaster'].includes(user.role)) {
       return res.status(403).json({ error: 'Ikke tilgang' });
     }
 
-    const { name, scenario_id, scheduled_at, organization_id, team_count, team_names } = req.body;
+    // Godta concept_id (nytt) og scenario_id (gammelt frontend-felt)
+    const { name, concept_id, scenario_id, scheduled_at, organization_id, team_count, team_names } = req.body;
+    const conceptId = concept_id || scenario_id;
     if (!name?.trim()) return res.status(400).json({ error: 'Navn påkrevd' });
-    if (!scenario_id) return res.status(400).json({ error: 'Scenario påkrevd' });
+    if (!conceptId) return res.status(400).json({ error: 'Konsept påkrevd' });
 
     const targetOrgId = user.role === 'superadmin'
       ? (organization_id || user.organization_id)
       : user.organization_id;
     if (!targetOrgId) return res.status(400).json({ error: 'organization_id påkrevd' });
+
+    // Lisens-sjekk: ikke-superadmin må ha aktiv lisens på konseptet.
+    // (Selve credit-trekket skjer først når eventet settes live.)
+    if (user.role !== 'superadmin') {
+      const acc = await client.query(
+        `SELECT 1 FROM concept_access WHERE organization_id = $1 AND concept_id = $2 AND active = TRUE`,
+        [targetOrgId, conceptId]
+      );
+      if (acc.rows.length === 0) {
+        return res.status(403).json({ error: 'Bedriften har ikke lisens på dette konseptet' });
+      }
+    }
 
     const numTeams = parseInt(team_count, 10) || 0;
     if (numTeams < 1 || numTeams > 50) {
@@ -115,9 +137,9 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     const evRes = await client.query(
-      `INSERT INTO events (organization_id, scenario_id, name, code, scheduled_at, status, created_by_user_id)
+      `INSERT INTO events (organization_id, concept_id, name, code, scheduled_at, status, created_by_user_id)
        VALUES ($1, $2, $3, $4, $5, 'planned', $6) RETURNING *`,
-      [targetOrgId, scenario_id, name.trim(), eventCode, scheduled_at || null, user.id]
+      [targetOrgId, conceptId, name.trim(), eventCode, scheduled_at || null, user.id]
     );
     const ev = evRes.rows[0];
 
@@ -157,6 +179,57 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
+// Sett event live med credit-trekk. Trekker 1 credit fra bedriftens
+// lisens på konseptet, men kun én gang per event (credits_charged-guard).
+// Regler: ingen lisens-rad => gratis (superadmin-opprettet). 'free' => gratis.
+// 'credits' => trekk 1 hvis saldo > 0, ellers blokker.
+async function goLive(eventId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const evRes = await client.query(
+      `SELECT id, organization_id, concept_id, status, credits_charged FROM events WHERE id = $1 FOR UPDATE`,
+      [eventId]
+    );
+    if (evRes.rows.length === 0) { await client.query('ROLLBACK'); return { error: 'not_found' }; }
+    const ev = evRes.rows[0];
+
+    if (!ev.credits_charged) {
+      const accRes = await client.query(
+        `SELECT id, license_type, credits_remaining FROM concept_access
+         WHERE organization_id = $1 AND concept_id = $2 AND active = TRUE FOR UPDATE`,
+        [ev.organization_id, ev.concept_id]
+      );
+      const acc = accRes.rows[0];
+
+      if (acc && acc.license_type === 'credits') {
+        if (acc.credits_remaining <= 0) {
+          await client.query('ROLLBACK');
+          return { error: 'no_credits' };
+        }
+        await client.query(
+          `UPDATE concept_access SET credits_remaining = credits_remaining - 1, updated_at = NOW() WHERE id = $1`,
+          [acc.id]
+        );
+      }
+      // 'free' eller ingen lisens-rad => ingen trekk
+    }
+
+    const updRes = await client.query(
+      `UPDATE events SET status = 'live', credits_charged = TRUE WHERE id = $1 RETURNING *`,
+      [eventId]
+    );
+    await client.query('COMMIT');
+    return { event: updRes.rows[0] };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // Oppdater event (status, navn, etc)
 router.patch('/:id', requireAuth, async (req, res) => {
   try {
@@ -169,6 +242,28 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
 
     const { name, status, scheduled_at } = req.body;
+
+    // Sett-live håndteres separat pga. credit-trekk
+    if (status === 'live' && evRes.rows[0].status !== 'live') {
+      const result = await goLive(req.params.id);
+      if (result.error === 'no_credits') {
+        return res.status(402).json({ error: 'Ingen credits igjen på lisensen for dette konseptet' });
+      }
+      if (result.error) return res.status(404).json({ error: 'Event ikke funnet' });
+      getBroadcast(req)({ type: 'event_updated', event: result.event });
+
+      // Eventuelle samtidige navn/tidspunkt-endringer
+      if (name?.trim() || scheduled_at !== undefined) {
+        const u = [], p = []; let i = 1;
+        if (name?.trim()) { u.push(`name = $${i++}`); p.push(name.trim()); }
+        if (scheduled_at !== undefined) { u.push(`scheduled_at = $${i++}`); p.push(scheduled_at); }
+        p.push(req.params.id);
+        const r2 = await pool.query(`UPDATE events SET ${u.join(', ')} WHERE id = $${i} RETURNING *`, p);
+        return res.json(r2.rows[0]);
+      }
+      return res.json(result.event);
+    }
+
     const updates = [];
     const params = [];
     let i = 1;
