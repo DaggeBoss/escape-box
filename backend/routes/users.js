@@ -127,6 +127,46 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Tilbakestill passord for en bruker (admin-initiert — krever IKKE gammelt passord).
+//   - superadmin: kan tilbakestille for hvem som helst
+//   - org_admin: kun for brukere i egen bedrift, og ikke for superadmin
+// Egen-passordbytte (med gammelt passord) går fortsatt via
+// POST /api/auth/change-password og er tilgjengelig for alle innloggede.
+router.post('/:id/reset-password', requireAuth, async (req, res) => {
+  try {
+    const { user } = req;
+    const { new_password } = req.body;
+
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ error: 'Nytt passord må være minst 6 tegn' });
+    }
+
+    const targetRes = await pool.query(
+      'SELECT id, organization_id, role FROM users WHERE id = $1',
+      [req.params.id]
+    );
+    if (targetRes.rows.length === 0) return res.status(404).json({ error: 'Bruker ikke funnet' });
+    const target = targetRes.rows[0];
+
+    if (user.role === 'superadmin') {
+      // ok — full tilgang
+    } else if (user.role === 'org_admin') {
+      if (target.organization_id !== user.organization_id || target.role === 'superadmin') {
+        return res.status(403).json({ error: 'Ikke tilgang' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Ikke tilgang' });
+    }
+
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, target.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server feil' });
+  }
+});
+
 // Slett bruker
 router.delete('/:id', requireAuth, async (req, res) => {
   try {

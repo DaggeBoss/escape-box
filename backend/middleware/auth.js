@@ -3,12 +3,13 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 // Token-levetid splittet etter brukertype:
-//   - Admin/gamemaster/org_admin/superadmin: 180 dager (lang nok til
-//     at man slipper å re-logge ofte under et engasjement, men kort
-//     nok til at en stjålet token ikke gir evig tilgang)
+//   - Admin/gamemaster/org_admin/superadmin: 365 dager. Lang nok til at
+//     man i praksis aldri re-logger under normal bruk; auto-utlogging i
+//     frontend fungerer da kun som sikkerhetsnett (utløpt/ugyldig token
+//     -> tilbake til login). Vil du stramme inn senere er dette ett tall.
 //   - Deltager (participant): 12 timer hard cutoff. Realistisk event
 //     varer 1-3 timer; 12t gir romslig margin uten å være risikabelt.
-const ADMIN_TOKEN_EXPIRY  = '180d';
+const ADMIN_TOKEN_EXPIRY  = '365d';
 const PARTICIPANT_TOKEN_EXPIRY = '12h';
 
 // ─── Signering ───────────────────────────────────────────
@@ -115,7 +116,9 @@ function requireAnyAuth(req, res, next) {
 }
 
 // Hjelper: sjekker at brukerens organization_id matcher en gitt org
-// (superadmin kan se alt)
+// (superadmin kan se alt). Brukes i dag til både lesing og skriving.
+// Når vi senere vil gjøre superadmin les-only på fremmede bedrifter,
+// splitter vi denne i en lese-sjekk (uendret) og en forvaltnings-sjekk.
 function canAccessOrg(user, orgId) {
   if (!user) return false;
   if (user.role === 'superadmin') return true;

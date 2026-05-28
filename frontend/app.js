@@ -92,7 +92,9 @@ async function api(path, opts = {}) {
     err.status = res.status;
     err.data = data;
     if (res.status === 401 && state.token) {
-      // token utløpt eller ugyldig
+      // token utløpt eller ugyldig — varsle og send tilbake til login.
+      // (Bevisst "Logg ut"-klikk går rett til logout() uten dette varselet.)
+      showToast('Økten er utløpt — logg inn på nytt', 'warn', 4000);
       logout();
     }
     throw err;
@@ -176,7 +178,10 @@ async function uploadImage(file, opts = {}) {
         const err = new Error((data && data.error) || `HTTP ${xhr.status}`);
         err.status = xhr.status;
         err.data = data;
-        if (xhr.status === 401) logout();
+        if (xhr.status === 401) {
+          showToast('Økten er utløpt — logg inn på nytt', 'warn', 4000);
+          logout();
+        }
         reject(err);
       }
     });
@@ -1408,6 +1413,7 @@ views.users = async function (root) {
                 <td>${formatDateShort(u.created_at)}</td>
                 <td class="col-actions">
                   <button class="btn btn-sm btn-secondary" onclick="toggleUserActive(${u.id}, ${!u.active})" ${u.id === state.user.id ? 'disabled' : ''}>${u.active ? 'Deaktiver' : 'Aktiver'}</button>
+                  ${u.id === state.user.id ? '' : `<button class="btn btn-sm btn-secondary" onclick="resetUserPassword(${u.id})">Nullstill passord</button>`}
                   <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})" ${u.id === state.user.id ? 'disabled' : ''}>Slett</button>
                 </td>
               </tr>
@@ -1507,6 +1513,45 @@ async function deleteUser(id) {
     showToast('Bruker slettet', 'success');
     goto('users');
   } catch (e) { showToast(e.message, 'error'); }
+}
+
+// Admin-initiert passord-nullstilling. Backend tillater superadmin for alle,
+// og org_admin for brukere i egen bedrift (ikke superadmin). Krever ikke
+// gammelt passord — egen-bytte med gammelt passord går via Min profil.
+function resetUserPassword(id) {
+  const u = (state.users || []).find(x => x.id === id);
+  const name = u ? u.name : 'bruker';
+  openModal({
+    title: 'Nullstill passord',
+    body: `
+      <p class="muted" style="margin-bottom:12px;">Sett nytt passord for <strong>${escapeHtml(name)}</strong>. Brukeren trenger ikke oppgi det gamle passordet.</p>
+      <div class="field">
+        <label class="field-label">Nytt passord</label>
+        <input id="rp-new" type="password" placeholder="Minst 6 tegn" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label class="field-label">Gjenta passord</label>
+        <input id="rp-new2" type="password" autocomplete="new-password">
+      </div>
+      <div id="rp-error" class="form-error hidden"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
+      <button class="btn" onclick="modalSubmit()">▶ Nullstill</button>
+    `,
+    onSubmit: async () => {
+      const errEl = $('#rp-error'); errEl.classList.add('hidden');
+      const nw = $('#rp-new').value;
+      const nw2 = $('#rp-new2').value;
+      if (nw.length < 6) { errEl.textContent = 'Passord må være minst 6 tegn'; errEl.classList.remove('hidden'); return; }
+      if (nw !== nw2) { errEl.textContent = 'Passordene er ikke like'; errEl.classList.remove('hidden'); return; }
+      try {
+        await api(`/api/users/${id}/reset-password`, { method: 'POST', body: { new_password: nw } });
+        closeModal();
+        showToast('Passord nullstilt', 'success');
+      } catch (e) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
+    },
+  });
 }
 
 /* ════════════════════════════════════════════════════════
