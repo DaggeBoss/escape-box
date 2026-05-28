@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════
-   ESCAPE BOX — ADMIN PORTAL
+   GAMEMASTER — ADMIN PORTAL
    Single-page vanilla JS application
    ──────────────────────────────────────────────────────── */
 
@@ -8,8 +8,8 @@ const WS_URL = window.APP_CONFIG.WS_URL;
 
 /* ─── STATE ──────────────────────────────────────────── */
 const state = {
-  token: localStorage.getItem('eb_token') || null,
-  user: JSON.parse(localStorage.getItem('eb_user') || 'null'),
+  token: localStorage.getItem('gm_token') || null,
+  user: JSON.parse(localStorage.getItem('gm_user') || 'null'),
   currentView: null,
   ws: null,
   wsRetry: 0,
@@ -243,16 +243,16 @@ async function login(email, password) {
   const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
   state.token = data.token;
   state.user = data.user;
-  localStorage.setItem('eb_token', data.token);
-  localStorage.setItem('eb_user', JSON.stringify(data.user));
+  localStorage.setItem('gm_token', data.token);
+  localStorage.setItem('gm_user', JSON.stringify(data.user));
   enterApp();
 }
 
 function logout() {
   state.token = null;
   state.user = null;
-  localStorage.removeItem('eb_token');
-  localStorage.removeItem('eb_user');
+  localStorage.removeItem('gm_token');
+  localStorage.removeItem('gm_user');
   if (state.ws) try { state.ws.close(); } catch {}
   state.ws = null;
   $('#login-screen').classList.remove('hidden');
@@ -472,7 +472,7 @@ document.addEventListener('keydown', (e) => {
     try {
       const me = await api('/api/auth/me');
       state.user = { ...state.user, ...me };
-      localStorage.setItem('eb_user', JSON.stringify(state.user));
+      localStorage.setItem('gm_user', JSON.stringify(state.user));
       enterApp();
     } catch {
       logout();
@@ -1625,8 +1625,8 @@ async function saveProfile() {
     const r = await api('/api/auth/update-profile', { method: 'POST', body: { name, email } });
     state.token = r.token;
     state.user = r.user;
-    localStorage.setItem('eb_token', r.token);
-    localStorage.setItem('eb_user', JSON.stringify(r.user));
+    localStorage.setItem('gm_token', r.token);
+    localStorage.setItem('gm_user', JSON.stringify(r.user));
     $('#header-user-name').textContent = r.user.name;
     msgEl.innerHTML = '<div class="form-success">Profil oppdatert</div>';
     showToast('Profil lagret', 'success');

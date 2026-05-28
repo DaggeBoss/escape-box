@@ -33,7 +33,7 @@ app.use(express.json({ limit: '5mb' }));
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'escape-box-backend', version: '2.0.0' });
+  res.json({ status: 'ok', service: 'gamemaster-backend', version: '2.2.0' });
 });
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
@@ -110,7 +110,7 @@ const PORT = process.env.PORT || 3000;
 initDatabase()
   .then(() => {
     server.listen(PORT, () => {
-      console.log(`🚀 Escape Box backend kjører på port ${PORT}`);
+      console.log(`🚀 GameMaster backend kjører på port ${PORT}`);
       console.log(`   WebSocket: ws://localhost:${PORT}/ws`);
       console.log(`   CORS allowed: ${allowedOrigins.join(', ')}`);
     });
