@@ -14,12 +14,12 @@ const state = {
   ws: null,
   wsRetry: 0,
   // cached lists
-  scenarios: [],
+  concepts: [],
   organizations: [],
   users: [],
   events: [],
   // selection
-  currentScenarioId: null,
+  currentConceptId: null,
   currentEventId: null,
 };
 
@@ -111,7 +111,7 @@ async function api(path, opts = {}) {
      file: File-objekt (fra <input type="file"> eller drag-and-drop)
      opts: { scenario_id, kind, maxWidth, quality, thumbWidth, thumbQuality }
        - scenario_id: påkrevd (heltall)
-       - kind: 'coords' | 'cards' | 'backgrounds' (default: 'coords')
+       - kind: 'cards' | 'minigames' (default: 'cards')
        - maxWidth: px (default 1600). Bildet skaleres ned hvis det er bredere.
        - quality: 0..1 (default 0.82). JPEG-kvalitet ved komprimering.
        - thumbWidth: px (default 300). Thumbnail-bredde. Sett til 0 for å droppe thumb.
@@ -123,7 +123,7 @@ async function uploadImage(file, opts = {}) {
   if (!file) throw new Error('Ingen fil oppgitt');
   if (!opts.scenario_id) throw new Error('scenario_id er påkrevd');
 
-  const kind = opts.kind || 'coords';
+  const kind = opts.kind || 'cards';
   const maxWidth = opts.maxWidth || 1600;
   const quality = opts.quality ?? 0.82;
   const thumbWidth = opts.thumbWidth ?? 300;
@@ -304,13 +304,6 @@ function roleLabel(r) {
 /* ─── ROUTER ──────────────────────────────────────────── */
 async function goto(view) {
   state.currentView = view;
-  // Rydd block-pick-modus ved view-bytte (pin ikke gyldig utenfor scenario-editor)
-  if (typeof blockEditorState !== 'undefined') {
-    blockEditorState.pickMode = false;
-    blockEditorState.activeBlockId = null;
-    const pin = $('#block-pick-pin');
-    if (pin) pin.style.display = 'none';
-  }
   $$('#sidebar .nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
   });
@@ -403,14 +396,6 @@ function openModal({ title, body, footer, size, onSubmit }) {
 function closeModal() {
   $('#modal-overlay').classList.remove('open');
   _modalOnSubmit = null;
-  // Hvis pick-modus ikke er aktivt (eller block-editor er ikke åpen lenger),
-  // sørg for at pin er skjult.
-  if (typeof blockEditorState !== 'undefined') {
-    if (!blockEditorState.pickMode) {
-      const pin = $('#block-pick-pin');
-      if (pin) pin.style.display = 'none';
-    }
-  }
 }
 function closeModalOnBackdrop(e) {
   if (e.target.id === 'modal-overlay') closeModal();
@@ -575,7 +560,7 @@ function eventsTable(events) {
           <tr>
             <th>Navn</th>
             <th>Kode</th>
-            <th>Scenario</th>
+            <th>Konsept</th>
             ${state.user.role === 'superadmin' ? '<th>Bedrift</th>' : ''}
             <th>Lag</th>
             <th>Planlagt</th>
@@ -588,7 +573,7 @@ function eventsTable(events) {
             <tr>
               <td><strong>${escapeHtml(e.name)}</strong></td>
               <td class="col-mono"><strong>${escapeHtml(e.code)}</strong></td>
-              <td>${escapeHtml(e.scenario_name || '—')}</td>
+              <td>${escapeHtml(e.concept_name || '—')}</td>
               ${state.user.role === 'superadmin' ? `<td>${escapeHtml(e.organization_name || '—')}</td>` : ''}
               <td class="col-num">${e.team_count || 0}</td>
               <td>${formatDateShort(e.scheduled_at)}</td>
@@ -649,13 +634,24 @@ views.events = async function (root) {
 };
 
 async function openCreateEventModal() {
-  // Hent scenarier og evt bedrifter
-  const [scenarios, orgs] = await Promise.all([
-    api('/api/scenarios').catch(() => []),
+  // Hent konsepter (kun lisensierte for ikke-superadmin) og evt bedrifter
+  const [concepts, orgs] = await Promise.all([
+    api('/api/concepts').catch(() => []),
     state.user.role === 'superadmin' ? api('/api/organizations').catch(() => []) : Promise.resolve([]),
   ]);
-  state.scenarios = scenarios;
+  state.concepts = concepts;
   state.organizations = orgs;
+
+  const conceptLabel = (c) => {
+    if (state.user.role === 'superadmin') return escapeHtml(c.name);
+    if (c.license_type === 'credits') return `${escapeHtml(c.name)} — ${c.credits_remaining} credits igjen`;
+    return `${escapeHtml(c.name)} — fri lisens`;
+  };
+
+  const activeConcepts = concepts.filter(c => c.active !== false);
+  const conceptOptions = activeConcepts.length
+    ? activeConcepts.map(c => `<option value="${c.id}">${conceptLabel(c)}</option>`).join('')
+    : '';
 
   const orgRow = state.user.role === 'superadmin'
     ? `<div class="field">
@@ -677,11 +673,12 @@ async function openCreateEventModal() {
 
       <div class="field-row">
         <div class="field">
-          <label class="field-label">Scenario</label>
-          <select id="ev-scenario">
-            <option value="">— Velg scenario —</option>
-            ${scenarios.filter(s => s.active).map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}
+          <label class="field-label">Konsept</label>
+          <select id="ev-concept">
+            <option value="">— Velg konsept —</option>
+            ${conceptOptions}
           </select>
+          ${activeConcepts.length === 0 ? '<span class="field-hint">Ingen tilgjengelige konsepter. Be om lisens fra administrator.</span>' : ''}
         </div>
         <div class="field">
           <label class="field-label">Planlagt tidspunkt</label>
@@ -719,7 +716,7 @@ async function createEvent() {
   errEl.classList.add('hidden');
 
   const name = $('#ev-name').value.trim();
-  const scenarioId = $('#ev-scenario').value;
+  const conceptId = $('#ev-concept').value;
   const when = $('#ev-when').value;
   const teamCount = parseInt($('#ev-team-count').value, 10) || 0;
   const teamNamesRaw = $('#ev-team-names').value.trim();
@@ -728,13 +725,13 @@ async function createEvent() {
   const organization_id = orgEl ? parseInt(orgEl.value, 10) : null;
 
   if (!name) { errEl.textContent = 'Eventnavn er påkrevd.'; errEl.classList.remove('hidden'); return; }
-  if (!scenarioId) { errEl.textContent = 'Velg et scenario.'; errEl.classList.remove('hidden'); return; }
+  if (!conceptId) { errEl.textContent = 'Velg et konsept.'; errEl.classList.remove('hidden'); return; }
   if (teamCount < 1 || teamCount > 50) { errEl.textContent = 'Antall lag må være 1–50.'; errEl.classList.remove('hidden'); return; }
 
   try {
     const body = {
       name,
-      scenario_id: parseInt(scenarioId, 10),
+      concept_id: parseInt(conceptId, 10),
       scheduled_at: when || null,
       team_count: teamCount,
       team_names: teamNames,
@@ -794,9 +791,9 @@ async function openEvent(eventId) {
           <span class="stat-sub">Deltakerne bruker denne</span>
         </div>
         <div class="stat-card blue">
-          <span class="stat-label">Scenario</span>
-          <span class="stat-value" style="font-size:18px;font-family:var(--font-serif);">${escapeHtml(ev.scenario_name || '—')}</span>
-          <span class="stat-sub">${ev.scenario_time_limit ? Math.round(ev.scenario_time_limit / 60) + ' min tidsgrense' : 'Ingen tidsgrense'}</span>
+          <span class="stat-label">Konsept</span>
+          <span class="stat-value" style="font-size:18px;font-family:var(--font-serif);">${escapeHtml(ev.concept_name || '—')}</span>
+          <span class="stat-sub">${ev.concept_time_limit ? Math.round(ev.concept_time_limit / 60) + ' min tidsgrense' : 'Ingen tidsgrense'}</span>
         </div>
         <div class="stat-card amber">
           <span class="stat-label">Status</span>
@@ -981,57 +978,58 @@ function printTeamCards(eventId) {
 }
 
 /* ════════════════════════════════════════════════════════
-   VIEW: SCENARIOS
+   VIEW: KONSEPTER (kun superadmin)
    ──────────────────────────────────────────────────────── */
-views.scenarios = async function (root) {
+views.concepts = async function (root) {
   if (state.user.role !== 'superadmin') {
-    root.innerHTML = '<div class="form-error">Kun superadmin har tilgang til scenarier.</div>';
+    root.innerHTML = '<div class="form-error">Kun superadmin har tilgang til konsepter.</div>';
     return;
   }
-  const scenarios = await api('/api/scenarios?all=1');
-  state.scenarios = scenarios;
+  const concepts = await api('/api/concepts?all=1');
+  state.concepts = concepts;
 
   root.innerHTML = `
     <div class="page-header">
       <div>
         <div class="page-eyebrow">Innhold</div>
-        <div class="page-title">Scenarier</div>
+        <div class="page-title">Konsepter</div>
       </div>
       <div class="page-actions">
-        <button class="btn" onclick="openCreateScenarioModal()">+ Nytt scenario</button>
+        <button class="btn" onclick="openCreateConceptModal()">+ Nytt konsept</button>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-header"><span class="ph-icon">◆</span> Scenariobibliotek</div>
+      <div class="panel-header"><span class="ph-icon">◆</span> Konseptbibliotek</div>
       <div class="panel-body tight">
-        ${scenarios.length === 0
-          ? `<div class="empty-state" style="border:none;"><span class="empty-icon">◇</span><span class="empty-text">Ingen scenarier ennå</span><span class="empty-sub">Opprett ditt første scenario</span></div>`
+        ${concepts.length === 0
+          ? `<div class="empty-state" style="border:none;"><span class="empty-icon">◇</span><span class="empty-text">Ingen konsepter ennå</span><span class="empty-sub">Opprett ditt første konsept</span></div>`
           : `
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
                 <th>Navn</th>
+                <th>Key</th>
                 <th>Beskrivelse</th>
                 <th>Tidsgrense</th>
-                <th>Passord</th>
                 <th>Status</th>
                 <th class="col-actions">Handlinger</th>
               </tr>
             </thead>
             <tbody>
-              ${scenarios.map(s => `
-                <tr class="${!s.active ? 'row-muted' : ''}">
-                  <td><strong>${escapeHtml(s.name)}</strong></td>
-                  <td><span class="muted" style="font-size:13px;">${escapeHtml((s.description || '').slice(0, 80))}${(s.description || '').length > 80 ? '…' : ''}</span></td>
-                  <td class="col-mono">${s.time_limit_seconds ? Math.round(s.time_limit_seconds / 60) + ' min' : '—'}</td>
-                  <td class="col-num">${s.passwords_count || 0}</td>
-                  <td>${s.active ? '<span class="badge green">Aktiv</span>' : '<span class="badge">Inaktiv</span>'}</td>
+              ${concepts.map(c => `
+                <tr class="${!c.active ? 'row-muted' : ''}">
+                  <td><strong>${escapeHtml(c.name)}</strong></td>
+                  <td class="col-mono">${escapeHtml(c.key || '—')}</td>
+                  <td><span class="muted" style="font-size:13px;">${escapeHtml((c.description || '').slice(0, 70))}${(c.description || '').length > 70 ? '…' : ''}</span></td>
+                  <td class="col-mono">${c.time_limit_seconds ? Math.round(c.time_limit_seconds / 60) + ' min' : '—'}</td>
+                  <td>${c.active ? '<span class="badge green">Aktiv</span>' : '<span class="badge">Inaktiv</span>'}</td>
                   <td class="col-actions">
-                    <button class="btn btn-sm" onclick="openScenarioEditor(${s.id})">Rediger</button>
-                    <button class="btn btn-sm btn-secondary" onclick="toggleScenarioActive(${s.id}, ${!s.active})">${s.active ? 'Deaktiver' : 'Aktiver'}</button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteScenario(${s.id})">Slett</button>
+                    <button class="btn btn-sm" onclick="openConceptBuilder(${c.id})">Bygg</button>
+                    <button class="btn btn-sm btn-secondary" onclick="openConceptAccess(${c.id})">Tilganger</button>
+                    <button class="btn btn-sm btn-ghost" onclick="toggleConceptActive(${c.id}, ${!c.active})">${c.active ? 'Deaktiver' : 'Aktiver'}</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteConcept(${c.id})">Slett</button>
                   </td>
                 </tr>
               `).join('')}
@@ -1044,40 +1042,40 @@ views.scenarios = async function (root) {
   `;
 };
 
-function openCreateScenarioModal() {
+function openCreateConceptModal() {
   openModal({
-    title: 'Nytt scenario',
+    title: 'Nytt konsept',
     body: `
       <div class="field">
         <label class="field-label">Navn</label>
-        <input id="sc-name" type="text" placeholder="F.eks. Operasjon Nordlys" autocomplete="off">
+        <input id="c-name" type="text" placeholder="F.eks. Escape Box" autocomplete="off">
       </div>
       <div class="field">
         <label class="field-label">Beskrivelse</label>
-        <textarea id="sc-desc" placeholder="Kort beskrivelse av scenarioet"></textarea>
+        <textarea id="c-desc" placeholder="Kort beskrivelse av konseptet"></textarea>
       </div>
       <div class="field">
         <label class="field-label">Tidsgrense (minutter)</label>
-        <input id="sc-time" type="number" min="5" max="240" value="60">
+        <input id="c-time" type="number" min="5" max="240" value="60">
       </div>
-      <div id="sc-error" class="form-error hidden"></div>
+      <div id="c-error" class="form-error hidden"></div>
     `,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
       <button class="btn" onclick="modalSubmit()">▶ Opprett</button>
     `,
     onSubmit: async () => {
-      const name = $('#sc-name').value.trim();
-      const desc = $('#sc-desc').value.trim();
-      const mins = parseInt($('#sc-time').value, 10) || 60;
-      const errEl = $('#sc-error');
+      const name = $('#c-name').value.trim();
+      const desc = $('#c-desc').value.trim();
+      const mins = parseInt($('#c-time').value, 10) || 60;
+      const errEl = $('#c-error');
       if (!name) { errEl.textContent = 'Navn påkrevd'; errEl.classList.remove('hidden'); return; }
       try {
-        const sc = await api('/api/scenarios', { method: 'POST', body: { name, description: desc || null, time_limit_seconds: mins * 60 } });
+        const c = await api('/api/concepts', { method: 'POST', body: { name, description: desc || null, time_limit_seconds: mins * 60 } });
         closeModal();
-        showToast('Scenario opprettet', 'success');
-        goto('scenarios');
-        setTimeout(() => openScenarioEditor(sc.id), 200);
+        showToast('Konsept opprettet', 'success');
+        goto('concepts');
+        setTimeout(() => openConceptBuilder(c.id), 200);
       } catch (e) {
         errEl.textContent = e.message; errEl.classList.remove('hidden');
       }
@@ -1085,125 +1083,268 @@ function openCreateScenarioModal() {
   });
 }
 
-async function toggleScenarioActive(id, active) {
+async function toggleConceptActive(id, active) {
   try {
-    await api(`/api/scenarios/${id}`, { method: 'PATCH', body: { active } });
+    await api(`/api/concepts/${id}`, { method: 'PATCH', body: { active } });
     showToast(active ? 'Aktivert' : 'Deaktivert', 'success');
-    goto('scenarios');
+    goto('concepts');
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-async function deleteScenario(id) {
-  const ok = await confirmDialog('Slette dette scenarioet? Hvis det er i bruk, blir det deaktivert i stedet.', 'Slett scenario');
+async function deleteConcept(id) {
+  const ok = await confirmDialog('Slette dette konseptet? Hvis det er i bruk, blir det deaktivert i stedet.', 'Slett konsept');
   if (!ok) return;
   try {
-    const r = await api(`/api/scenarios/${id}`, { method: 'DELETE' });
-    showToast(r.deactivated ? 'Scenario deaktivert (i bruk)' : 'Scenario slettet', 'success');
-    goto('scenarios');
+    const r = await api(`/api/concepts/${id}`, { method: 'DELETE' });
+    showToast(r.deactivated ? 'Konsept deaktivert (i bruk)' : 'Konsept slettet', 'success');
+    goto('concepts');
   } catch (e) { showToast(e.message, 'error'); }
 }
+
 /* ════════════════════════════════════════════════════════
-   SCENARIO EDITOR
+   KONSEPT-BYGGER (skreddersydd per konsept via `key`)
    ────────────────────────────────────────────────────────
-   Sesjon 1: Investigation board, koordinater, grid, ankere
-   og PNG-eksport er fjernet. Editoren bygges på nytt i
-   sesjon 2 med passord-baserte triggere.
+   Felles metadata + ruting til riktig bygger basert på key.
+   Den fulle Escape Box-innholdsbyggeren (passord/kort/minispill/
+   fiktiv server) bygges i eget spor.
    ──────────────────────────────────────────────────────── */
-async function openScenarioEditor(scenarioId) {
-  state.currentScenarioId = scenarioId;
-  let sc;
+async function openConceptBuilder(conceptId) {
+  state.currentConceptId = conceptId;
+  let c;
   try {
-    sc = await api(`/api/scenarios/${scenarioId}`);
+    c = await api(`/api/concepts/${conceptId}`);
   } catch (e) {
-    showToast('Kunne ikke hente scenario: ' + e.message, 'error');
+    showToast('Kunne ikke hente konsept: ' + e.message, 'error');
     return;
   }
 
-  const sd = sc.scenario_data || {};
-  const passwords = Array.isArray(sd.passwords) ? sd.passwords : [];
-  const cards = Array.isArray(sd.cards) ? sd.cards : [];
-  const minigames = Array.isArray(sd.minigames) ? sd.minigames : [];
-
   openModal({
-    title: `Rediger: ${sc.name}`,
+    title: `Bygg: ${c.name}`,
+    size: 'lg',
     body: `
-      <div class="field">
-        <label class="field-label">Navn</label>
-        <input id="sc-edit-name" type="text" value="${escapeHtml(sc.name)}">
+      <div class="field-row">
+        <div class="field">
+          <label class="field-label">Navn</label>
+          <input id="c-edit-name" type="text" value="${escapeHtml(c.name)}">
+        </div>
+        <div class="field">
+          <label class="field-label">Key</label>
+          <input id="c-edit-key" type="text" value="${escapeHtml(c.key || '')}" class="col-mono">
+          <span class="field-hint">Peker til hardkodet motor/bygger. Endres sjelden.</span>
+        </div>
       </div>
       <div class="field">
         <label class="field-label">Beskrivelse</label>
-        <textarea id="sc-edit-desc">${escapeHtml(sc.description || '')}</textarea>
+        <textarea id="c-edit-desc">${escapeHtml(c.description || '')}</textarea>
       </div>
       <div class="field">
         <label class="field-label">Tidsgrense (minutter)</label>
-        <input id="sc-edit-time" type="number" min="5" max="240"
-               value="${Math.round((sc.time_limit_seconds || 3600) / 60)}">
+        <input id="c-edit-time" type="number" min="5" max="240" value="${Math.round((c.time_limit_seconds || 3600) / 60)}">
       </div>
 
-      <div class="panel" style="margin-top:18px;">
-        <div class="panel-header"><span class="ph-icon">⟳</span> Innhold</div>
-        <div class="panel-body">
-          <div class="muted" style="font-size:13px;line-height:1.6;">
-            Editoren for passord, kort, minispill og fiktiv server bygges i sesjon 2.
-            Foreløpig kan du opprette og navngi scenarier, men ikke legge til innhold.
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px;">
-            <div class="stat-card" style="padding:12px;">
-              <span class="stat-label">Passord</span>
-              <span class="stat-value" style="font-size:22px;">${passwords.length}</span>
-            </div>
-            <div class="stat-card" style="padding:12px;">
-              <span class="stat-label">Kort</span>
-              <span class="stat-value" style="font-size:22px;">${cards.length}</span>
-            </div>
-            <div class="stat-card" style="padding:12px;">
-              <span class="stat-label">Minispill</span>
-              <span class="stat-value" style="font-size:22px;">${minigames.length}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      ${conceptBuilderBody(c.key || '', c.config || {})}
 
-      <div id="sc-edit-error" class="form-error hidden" style="margin-top:12px;"></div>
+      <div id="c-edit-error" class="form-error hidden" style="margin-top:12px;"></div>
     `,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Lukk</button>
-      <button class="btn" onclick="saveScenarioMeta(${scenarioId})">Lagre</button>
+      <button class="btn" onclick="saveConceptMeta(${conceptId})">Lagre</button>
     `,
-    width: 'medium',
   });
 }
 
-async function saveScenarioMeta(scenarioId) {
-  const name = $('#sc-edit-name').value.trim();
-  const description = $('#sc-edit-desc').value.trim();
-  const mins = parseInt($('#sc-edit-time').value, 10);
-  const errEl = $('#sc-edit-error');
-
-  if (!name) {
-    errEl.textContent = 'Navn påkrevd';
-    errEl.classList.remove('hidden');
-    return;
+// Bygger-innholdet pr konsept-type. Returnerer HTML.
+function conceptBuilderBody(key, cfg) {
+  if (key === 'escape_box') {
+    const passwords = Array.isArray(cfg.passwords) ? cfg.passwords : [];
+    const cards = Array.isArray(cfg.cards) ? cfg.cards : [];
+    const minigames = Array.isArray(cfg.minigames) ? cfg.minigames : [];
+    return `
+      <div class="panel" style="margin-top:18px;">
+        <div class="panel-header"><span class="ph-icon">◆</span> Escape Box — innhold</div>
+        <div class="panel-body">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+            <div class="stat-card" style="padding:12px;"><span class="stat-label">Passord</span><span class="stat-value" style="font-size:22px;">${passwords.length}</span></div>
+            <div class="stat-card" style="padding:12px;"><span class="stat-label">Kort</span><span class="stat-value" style="font-size:22px;">${cards.length}</span></div>
+            <div class="stat-card" style="padding:12px;"><span class="stat-label">Minispill</span><span class="stat-value" style="font-size:22px;">${minigames.length}</span></div>
+          </div>
+          <div class="muted" style="font-size:13px;line-height:1.6;margin-top:14px;">
+            Den fulle innholdsbyggeren (passord-triggere, kort, minispill og fiktiv server)
+            bygges som eget spor. Foreløpig kan du redigere metadata over.
+          </div>
+        </div>
+      </div>
+    `;
   }
+  return `
+    <div class="panel" style="margin-top:18px;">
+      <div class="panel-header"><span class="ph-icon">◇</span> Bygger</div>
+      <div class="panel-body">
+        <div class="muted" style="font-size:13px;">Ingen skreddersydd bygger for dette konseptet ennå.</div>
+      </div>
+    </div>
+  `;
+}
+
+async function saveConceptMeta(conceptId) {
+  const name = $('#c-edit-name').value.trim();
+  const key = $('#c-edit-key').value.trim();
+  const description = $('#c-edit-desc').value.trim();
+  const mins = parseInt($('#c-edit-time').value, 10);
+  const errEl = $('#c-edit-error');
+
+  if (!name) { errEl.textContent = 'Navn påkrevd'; errEl.classList.remove('hidden'); return; }
 
   try {
-    await api(`/api/scenarios/${scenarioId}`, {
+    await api(`/api/concepts/${conceptId}`, {
       method: 'PATCH',
       body: {
         name,
+        key: key || undefined,
         description: description || null,
         time_limit_seconds: (mins > 0 ? mins : 60) * 60,
       },
     });
-    showToast('Scenario lagret', 'success');
+    showToast('Konsept lagret', 'success');
     closeModal();
-    if (state.currentView === 'scenarios') goto('scenarios');
+    if (state.currentView === 'concepts') goto('concepts');
   } catch (e) {
     errEl.textContent = e.message;
     errEl.classList.remove('hidden');
   }
 }
+
+/* ════════════════════════════════════════════════════════
+   KONSEPT-TILGANGER (lisens + credits per bedrift)
+   ──────────────────────────────────────────────────────── */
+async function openConceptAccess(conceptId) {
+  let concept = (state.concepts || []).find(x => x.id === conceptId);
+  let grants = [], orgs = [];
+  try {
+    [grants, orgs] = await Promise.all([
+      api(`/api/concept-access?concept_id=${conceptId}`),
+      api('/api/organizations'),
+    ]);
+    if (!concept) concept = await api(`/api/concepts/${conceptId}`);
+  } catch (e) {
+    showToast('Kunne ikke hente tilganger: ' + e.message, 'error');
+    return;
+  }
+
+  const grantedOrgIds = new Set(grants.map(g => g.organization_id));
+  const availableOrgs = orgs.filter(o => !grantedOrgIds.has(o.id));
+
+  const grantRows = grants.length === 0
+    ? `<tr><td colspan="4" class="muted text-center" style="padding:14px;">Ingen bedrifter har lisens ennå</td></tr>`
+    : grants.map(g => `
+        <tr class="${g.active ? '' : 'row-muted'}">
+          <td><strong>${escapeHtml(g.organization_name)}</strong></td>
+          <td>${g.license_type === 'credits'
+            ? `<span class="badge amber">Credits</span> <span class="col-mono">${g.credits_remaining}</span> igjen <span class="muted" style="font-size:11px;">(av ${g.credits_granted})</span>`
+            : '<span class="badge green">Fri lisens</span>'}</td>
+          <td>
+            <input id="ca-add-${g.id}" type="number" min="1" value="10" style="width:70px;">
+            <button class="btn btn-sm btn-secondary" onclick="caAddCredits(${g.id}, ${conceptId})">+ Credits</button>
+          </td>
+          <td class="col-actions">
+            ${g.license_type === 'credits'
+              ? `<button class="btn btn-sm btn-ghost" onclick="caSetType(${g.id}, ${conceptId}, 'free')">→ Fri</button>`
+              : `<button class="btn btn-sm btn-ghost" onclick="caSetType(${g.id}, ${conceptId}, 'credits')">→ Credits</button>`}
+            <button class="btn btn-sm btn-danger" onclick="caRevoke(${g.id}, ${conceptId})">Fjern</button>
+          </td>
+        </tr>
+      `).join('');
+
+  openModal({
+    title: `Tilganger: ${concept ? concept.name : 'Konsept'}`,
+    size: 'lg',
+    body: `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="panel-header"><span class="ph-icon">+</span> Gi lisens til bedrift</div>
+        <div class="panel-body">
+          ${availableOrgs.length === 0
+            ? '<div class="muted" style="font-size:13px;">Alle bedrifter har allerede en lisens på dette konseptet.</div>'
+            : `
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">Bedrift</label>
+              <select id="ca-org">
+                ${availableOrgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Lisenstype</label>
+              <select id="ca-type" onchange="document.getElementById('ca-credits-wrap').style.display = this.value === 'credits' ? 'block' : 'none';">
+                <option value="free">Fri lisens (ubegrenset)</option>
+                <option value="credits">Credits (per gjennomføring)</option>
+              </select>
+            </div>
+          </div>
+          <div class="field" id="ca-credits-wrap" style="display:none;">
+            <label class="field-label">Antall credits</label>
+            <input id="ca-credits" type="number" min="1" value="10">
+          </div>
+          <button class="btn" onclick="caGrant(${conceptId})" style="margin-top:8px;">▶ Gi lisens</button>
+          `}
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><span class="ph-icon">◫</span> Bedrifter med lisens</div>
+        <div class="panel-body tight">
+          <table class="data-table">
+            <thead><tr><th>Bedrift</th><th>Lisens</th><th>Fyll på</th><th class="col-actions">Handling</th></tr></thead>
+            <tbody>${grantRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Lukk</button>`,
+  });
+}
+
+async function caGrant(conceptId) {
+  const orgEl = $('#ca-org');
+  if (!orgEl) return;
+  const organization_id = parseInt(orgEl.value, 10);
+  const license_type = $('#ca-type').value;
+  const credits = license_type === 'credits' ? (parseInt($('#ca-credits').value, 10) || 0) : 0;
+  try {
+    await api('/api/concept-access', { method: 'POST', body: { organization_id, concept_id: conceptId, license_type, credits } });
+    showToast('Lisens gitt', 'success');
+    openConceptAccess(conceptId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function caAddCredits(id, conceptId) {
+  const el = $(`#ca-add-${id}`);
+  const add_credits = el ? parseInt(el.value, 10) || 0 : 0;
+  if (add_credits <= 0) { showToast('Oppgi et positivt antall', 'warn'); return; }
+  try {
+    await api(`/api/concept-access/${id}`, { method: 'PATCH', body: { add_credits } });
+    showToast(`+${add_credits} credits`, 'success');
+    openConceptAccess(conceptId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function caSetType(id, conceptId, license_type) {
+  try {
+    await api(`/api/concept-access/${id}`, { method: 'PATCH', body: { license_type } });
+    showToast(license_type === 'free' ? 'Satt til fri lisens' : 'Satt til credits', 'success');
+    openConceptAccess(conceptId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function caRevoke(id, conceptId) {
+  const ok = await confirmDialog('Fjerne lisensen for denne bedriften?', 'Fjern lisens');
+  if (!ok) return;
+  try {
+    await api(`/api/concept-access/${id}`, { method: 'DELETE' });
+    showToast('Lisens fjernet', 'success');
+    openConceptAccess(conceptId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
 /* ════════════════════════════════════════════════════════
    VIEW: ORGANIZATIONS (kun superadmin)
    ──────────────────────────────────────────────────────── */
@@ -1732,7 +1873,7 @@ async function renderLiveView(root, eventId) {
       <div class="stat-card amber"><span class="stat-label">Eventkode</span><span class="stat-value mono" style="font-size:32px;">${escapeHtml(ev.code)}</span></div>
       <div class="stat-card"><span class="stat-label">Status</span><span class="stat-value" style="font-size:18px;">${eventStatusBadge(ev.status)}</span></div>
       <div class="stat-card green"><span class="stat-label">Aktive sesjoner</span><span class="stat-value" id="live-active-count">${sessions.length}</span><span class="stat-sub">av ${(ev.teams || []).length} lag</span></div>
-      <div class="stat-card blue"><span class="stat-label">Scenario</span><span class="stat-value" style="font-size:16px;font-family:var(--font-serif);">${escapeHtml(ev.scenario_name || '—')}</span></div>
+      <div class="stat-card blue"><span class="stat-label">Konsept</span><span class="stat-value" style="font-size:16px;font-family:var(--font-serif);">${escapeHtml(ev.concept_name || '—')}</span></div>
     </div>
 
     <div class="panel">
