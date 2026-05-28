@@ -1102,12 +1102,17 @@ async function deleteConcept(id) {
 }
 
 /* ════════════════════════════════════════════════════════
-   KONSEPT-BYGGER (skreddersydd per konsept via `key`)
+   KONSEPT-BYGGER
    ────────────────────────────────────────────────────────
-   Felles metadata + ruting til riktig bygger basert på key.
-   Den fulle Escape Box-innholdsbyggeren (passord/kort/minispill/
-   fiktiv server) bygges i eget spor.
+   openConceptBuilder ruter på key:
+     - escape_box -> full-side Spillflyt-bygger (bolk 1)
+     - andre      -> enkel metadata-modal
+   Escape Box-byggeren redigerer konseptets `config` i minnet
+   (ebb) og lagrer alt samlet via PATCH.
    ──────────────────────────────────────────────────────── */
+
+let ebb = null; // { conceptId, concept, config, tab }
+
 async function openConceptBuilder(conceptId) {
   state.currentConceptId = conceptId;
   let c;
@@ -1117,73 +1122,33 @@ async function openConceptBuilder(conceptId) {
     showToast('Kunne ikke hente konsept: ' + e.message, 'error');
     return;
   }
+  if (c.key === 'escape_box') {
+    ebb = { conceptId, concept: c, config: normalizeEbConfig(c.config), tab: 'flow' };
+    renderEbBuilder();
+  } else {
+    openSimpleConceptMeta(c);
+  }
+}
 
+// Enkel metadata-editor for konsepter uten skreddersydd bygger
+function openSimpleConceptMeta(c) {
   openModal({
     title: `Bygg: ${c.name}`,
-    size: 'lg',
     body: `
       <div class="field-row">
-        <div class="field">
-          <label class="field-label">Navn</label>
-          <input id="c-edit-name" type="text" value="${escapeHtml(c.name)}">
-        </div>
-        <div class="field">
-          <label class="field-label">Key</label>
-          <input id="c-edit-key" type="text" value="${escapeHtml(c.key || '')}" class="col-mono">
-          <span class="field-hint">Peker til hardkodet motor/bygger. Endres sjelden.</span>
-        </div>
+        <div class="field"><label class="field-label">Navn</label><input id="c-edit-name" type="text" value="${escapeHtml(c.name)}"></div>
+        <div class="field"><label class="field-label">Key</label><input id="c-edit-key" type="text" value="${escapeHtml(c.key || '')}" class="col-mono"></div>
       </div>
-      <div class="field">
-        <label class="field-label">Beskrivelse</label>
-        <textarea id="c-edit-desc">${escapeHtml(c.description || '')}</textarea>
-      </div>
-      <div class="field">
-        <label class="field-label">Tidsgrense (minutter)</label>
-        <input id="c-edit-time" type="number" min="5" max="240" value="${Math.round((c.time_limit_seconds || 3600) / 60)}">
-      </div>
-
-      ${conceptBuilderBody(c.key || '', c.config || {})}
-
+      <div class="field"><label class="field-label">Beskrivelse</label><textarea id="c-edit-desc">${escapeHtml(c.description || '')}</textarea></div>
+      <div class="field"><label class="field-label">Tidsgrense (minutter)</label><input id="c-edit-time" type="number" min="5" max="240" value="${Math.round((c.time_limit_seconds || 3600) / 60)}"></div>
+      <div class="muted" style="font-size:13px;margin-top:10px;">Ingen skreddersydd bygger for dette konseptet ennå.</div>
       <div id="c-edit-error" class="form-error hidden" style="margin-top:12px;"></div>
     `,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Lukk</button>
-      <button class="btn" onclick="saveConceptMeta(${conceptId})">Lagre</button>
+      <button class="btn" onclick="saveConceptMeta(${c.id})">Lagre</button>
     `,
   });
-}
-
-// Bygger-innholdet pr konsept-type. Returnerer HTML.
-function conceptBuilderBody(key, cfg) {
-  if (key === 'escape_box') {
-    const passwords = Array.isArray(cfg.passwords) ? cfg.passwords : [];
-    const cards = Array.isArray(cfg.cards) ? cfg.cards : [];
-    const minigames = Array.isArray(cfg.minigames) ? cfg.minigames : [];
-    return `
-      <div class="panel" style="margin-top:18px;">
-        <div class="panel-header"><span class="ph-icon">◆</span> Escape Box — innhold</div>
-        <div class="panel-body">
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
-            <div class="stat-card" style="padding:12px;"><span class="stat-label">Passord</span><span class="stat-value" style="font-size:22px;">${passwords.length}</span></div>
-            <div class="stat-card" style="padding:12px;"><span class="stat-label">Kort</span><span class="stat-value" style="font-size:22px;">${cards.length}</span></div>
-            <div class="stat-card" style="padding:12px;"><span class="stat-label">Minispill</span><span class="stat-value" style="font-size:22px;">${minigames.length}</span></div>
-          </div>
-          <div class="muted" style="font-size:13px;line-height:1.6;margin-top:14px;">
-            Den fulle innholdsbyggeren (passord-triggere, kort, minispill og fiktiv server)
-            bygges som eget spor. Foreløpig kan du redigere metadata over.
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  return `
-    <div class="panel" style="margin-top:18px;">
-      <div class="panel-header"><span class="ph-icon">◇</span> Bygger</div>
-      <div class="panel-body">
-        <div class="muted" style="font-size:13px;">Ingen skreddersydd bygger for dette konseptet ennå.</div>
-      </div>
-    </div>
-  `;
 }
 
 async function saveConceptMeta(conceptId) {
@@ -1192,27 +1157,378 @@ async function saveConceptMeta(conceptId) {
   const description = $('#c-edit-desc').value.trim();
   const mins = parseInt($('#c-edit-time').value, 10);
   const errEl = $('#c-edit-error');
-
   if (!name) { errEl.textContent = 'Navn påkrevd'; errEl.classList.remove('hidden'); return; }
-
   try {
     await api(`/api/concepts/${conceptId}`, {
       method: 'PATCH',
-      body: {
-        name,
-        key: key || undefined,
-        description: description || null,
-        time_limit_seconds: (mins > 0 ? mins : 60) * 60,
-      },
+      body: { name, key: key || undefined, description: description || null, time_limit_seconds: (mins > 0 ? mins : 60) * 60 },
     });
     showToast('Konsept lagret', 'success');
     closeModal();
     if (state.currentView === 'concepts') goto('concepts');
-  } catch (e) {
-    errEl.textContent = e.message;
-    errEl.classList.remove('hidden');
-  }
+  } catch (e) { errEl.textContent = e.message; errEl.classList.remove('hidden'); }
 }
+
+/* ─── Escape Box-bygger: state-hjelpere ─────────────────── */
+function ebUid(prefix) {
+  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function normalizeEbConfig(cfg) {
+  cfg = cfg && typeof cfg === 'object' ? cfg : {};
+  return {
+    intro: cfg.intro && typeof cfg.intro === 'object'
+      ? { title: cfg.intro.title || '', body: cfg.intro.body || '', media_url: cfg.intro.media_url || '' }
+      : { title: '', body: '', media_url: '' },
+    flow: Array.isArray(cfg.flow) ? cfg.flow : [],
+    cards: Array.isArray(cfg.cards) ? cfg.cards : [],
+    minigames: Array.isArray(cfg.minigames) ? cfg.minigames : [],
+    fictional_server: cfg.fictional_server && typeof cfg.fictional_server === 'object'
+      ? cfg.fictional_server : { name: 'Server', folders: [] },
+    finale: cfg.finale && typeof cfg.finale === 'object' ? cfg.finale : null,
+    bigscreen: cfg.bigscreen && typeof cfg.bigscreen === 'object' ? cfg.bigscreen : null,
+    settings: {
+      time_limit_enabled: true, show_score: true, require_consent: true, streetview_enabled: true,
+      ...(cfg.settings || {}),
+    },
+  };
+}
+
+function ebRoot() { return $('#content .view[data-view="concepts"]'); }
+
+const EB_STEP_TYPES = { info: 'Info / historie', password: 'Passord', minigame: 'Minispill' };
+
+function renderEbBuilder() {
+  const root = ebRoot();
+  if (!root || !ebb) return;
+  root.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Konsept · ${escapeHtml(ebb.concept.name)}</div>
+        <div class="page-title">Escape Box-bygger</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" onclick="ebExit()">← Tilbake</button>
+        <button class="btn" onclick="ebSaveAll()">Lagre alt</button>
+      </div>
+    </div>
+
+    <div class="flex-gap mb-2" style="border-bottom:1px solid var(--bg3);padding-bottom:8px;">
+      <button class="btn btn-sm ${ebb.tab === 'flow' ? '' : 'btn-ghost'}" onclick="ebSetTab('flow')">1 · Spillflyt</button>
+      <button class="btn btn-sm btn-ghost" disabled title="Bolk 2">2 · GM-panel</button>
+      <button class="btn btn-sm btn-ghost" disabled title="Bolk 3">3 · Storskjerm</button>
+    </div>
+
+    ${ebFlowTab()}
+  `;
+}
+
+function ebSetTab(t) { ebb.tab = t; renderEbBuilder(); }
+function ebExit() { ebb = null; goto('concepts'); }
+
+function ebFlowTab() {
+  const c = ebb.config;
+  return `
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">▸</span> Intro <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-secondary" onclick="ebIntroModal()">Rediger</button>
+      </div>
+      <div class="panel-body">
+        <div><strong>${escapeHtml(c.intro.title || '(ingen tittel)')}</strong></div>
+        <div class="muted" style="font-size:13px;margin-top:4px;">${escapeHtml(c.intro.body || 'Ingen introtekst')}</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">⟱</span> Spillflyt <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-secondary" onclick="ebAddStage('single')">+ Steg</button>
+        <button class="btn btn-sm btn-secondary" onclick="ebAddStage('parallel')">+ Parallelt løp</button>
+      </div>
+      <div class="panel-body">
+        ${c.flow.length === 0
+          ? `<div class="muted text-center" style="padding:18px;">Ingen steg ennå. Legg til et steg eller et parallelt løp.</div>`
+          : c.flow.map((st, i) => ebStageCard(st, i, c.flow.length)).join('')}
+      </div>
+    </div>
+
+    ${ebCardsPanel()}
+    ${ebMinigamesPanel()}
+  `;
+}
+
+function ebStageCard(stage, idx, total) {
+  const isParallel = stage.mode === 'parallel';
+  const steps = Array.isArray(stage.steps) ? stage.steps : [];
+  return `
+    <div class="panel" style="margin-bottom:12px;border:1px solid var(--bg3);">
+      <div class="panel-header" style="font-size:13px;">
+        <span class="badge ${isParallel ? 'amber' : 'blue'}">${idx + 1}. ${isParallel ? 'Parallelt løp — alle må fullføres' : 'Steg'}</span>
+        <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-ghost" onclick="ebMoveStage(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn btn-sm btn-ghost" onclick="ebMoveStage(${idx}, 1)" ${idx === total - 1 ? 'disabled' : ''}>↓</button>
+        ${isParallel ? `<button class="btn btn-sm btn-secondary" onclick="ebStepModal(${idx}, null)">+ Steg i løpet</button>` : ''}
+        <button class="btn btn-sm btn-danger" onclick="ebDeleteStage(${idx})">Slett</button>
+      </div>
+      <div class="panel-body tight">
+        <table class="data-table">
+          <tbody>
+            ${steps.map((step, ti) => ebStepRow(step, idx, ti)).join('') || `<tr><td class="muted" style="padding:10px;">Tomt</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function ebStepRow(step, si, ti) {
+  const cards = ebb.config.cards;
+  const revealCount = Array.isArray(step.reveal_card_ids) ? step.reveal_card_ids.length : 0;
+  let detail = '';
+  if (step.type === 'password') {
+    detail = `<span class="col-mono">${escapeHtml(step.password || '----')}</span> · ${step.points || 0} p${revealCount ? ` · ${revealCount} kort` : ''}`;
+  } else if (step.type === 'minigame') {
+    const mg = (ebb.config.minigames || []).find(m => m.id === step.unlock_minigame_id);
+    detail = mg ? escapeHtml(mg.title) : '(ingen valgt)';
+  }
+  return `
+    <tr>
+      <td style="width:120px;"><span class="badge dark">${escapeHtml(EB_STEP_TYPES[step.type] || step.type)}</span></td>
+      <td><strong>${escapeHtml(step.title || '(uten tittel)')}</strong><div class="muted" style="font-size:12px;">${detail}</div></td>
+      <td class="col-actions" style="width:140px;">
+        <button class="btn btn-sm" onclick="ebStepModal(${si}, ${ti})">Rediger</button>
+        <button class="btn btn-sm btn-danger" onclick="ebDeleteStep(${si}, ${ti})">Slett</button>
+      </td>
+    </tr>
+  `;
+}
+
+function ebCardsPanel() {
+  const cards = ebb.config.cards;
+  return `
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">▤</span> Kort-bibliotek <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-secondary" onclick="ebCardModal(null)">+ Kort</button>
+      </div>
+      <div class="panel-body tight">
+        ${cards.length === 0
+          ? `<div class="muted" style="padding:12px;">Ingen kort ennå. Kort kan avsløres av passord-steg.</div>`
+          : `<table class="data-table"><tbody>
+              ${cards.map((c, i) => `
+                <tr>
+                  <td><strong>${escapeHtml(c.title || '(uten tittel)')}</strong><div class="muted" style="font-size:12px;">${escapeHtml((c.body || '').slice(0, 60))}</div></td>
+                  <td class="col-mono" style="font-size:11px;">${c.image_url ? '🖼' : '—'}</td>
+                  <td class="col-actions" style="width:140px;">
+                    <button class="btn btn-sm" onclick="ebCardModal(${i})">Rediger</button>
+                    <button class="btn btn-sm btn-danger" onclick="ebDeleteCard(${i})">Slett</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody></table>`}
+      </div>
+    </div>
+  `;
+}
+
+function ebMinigamesPanel() {
+  const mgs = ebb.config.minigames;
+  return `
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">◈</span> Minispill-bibliotek <span class="ph-spacer"></span>
+        <button class="btn btn-sm btn-secondary" onclick="ebMinigameModal(null)">+ Minispill</button>
+      </div>
+      <div class="panel-body tight">
+        ${mgs.length === 0
+          ? `<div class="muted" style="padding:12px;">Ingen minispill ennå.</div>`
+          : `<table class="data-table"><tbody>
+              ${mgs.map((m, i) => `
+                <tr>
+                  <td><strong>${escapeHtml(m.title || '(uten tittel)')}</strong></td>
+                  <td class="col-mono" style="font-size:12px;">${escapeHtml(m.type || '—')}</td>
+                  <td class="col-actions" style="width:140px;">
+                    <button class="btn btn-sm" onclick="ebMinigameModal(${i})">Rediger</button>
+                    <button class="btn btn-sm btn-danger" onclick="ebDeleteMinigame(${i})">Slett</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody></table>`}
+      </div>
+    </div>
+  `;
+}
+
+/* ─── Mutatorer (oppdaterer ebb.config + re-render) ─────── */
+function ebNewStep(type) {
+  return { id: ebUid('step'), type: type || 'info', title: '', body: '', media_url: '', password: '', points: 0, reveal_card_ids: [], unlock_minigame_id: '' };
+}
+function ebAddStage(mode) {
+  ebb.config.flow.push({ id: ebUid('stage'), mode: mode === 'parallel' ? 'parallel' : 'single', steps: [ebNewStep('info')] });
+  renderEbBuilder();
+}
+function ebDeleteStage(idx) {
+  ebb.config.flow.splice(idx, 1);
+  renderEbBuilder();
+}
+function ebMoveStage(idx, dir) {
+  const f = ebb.config.flow;
+  const j = idx + dir;
+  if (j < 0 || j >= f.length) return;
+  [f[idx], f[j]] = [f[j], f[idx]];
+  renderEbBuilder();
+}
+function ebDeleteStep(si, ti) {
+  ebb.config.flow[si].steps.splice(ti, 1);
+  renderEbBuilder();
+}
+
+function ebIntroModal() {
+  const intro = ebb.config.intro;
+  openModal({
+    title: 'Intro',
+    body: `
+      <div class="field"><label class="field-label">Tittel</label><input id="eb-intro-title" type="text" value="${escapeHtml(intro.title)}"></div>
+      <div class="field"><label class="field-label">Tekst</label><textarea id="eb-intro-body" rows="4">${escapeHtml(intro.body)}</textarea></div>
+      <div class="field"><label class="field-label">Media-URL (valgfritt)</label><input id="eb-intro-media" type="text" value="${escapeHtml(intro.media_url)}" placeholder="https://…"></div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre</button>`,
+    onSubmit: () => {
+      ebb.config.intro = {
+        title: $('#eb-intro-title').value.trim(),
+        body: $('#eb-intro-body').value.trim(),
+        media_url: $('#eb-intro-media').value.trim(),
+      };
+      closeModal(); renderEbBuilder();
+    },
+  });
+}
+
+function ebStepModal(si, ti) {
+  const isNew = ti === null || ti === undefined;
+  const step = isNew ? ebNewStep('info') : ebb.config.flow[si].steps[ti];
+  const cards = ebb.config.cards;
+  const mgs = ebb.config.minigames;
+  const typeOptions = Object.entries(EB_STEP_TYPES).map(([v, l]) => `<option value="${v}" ${step.type === v ? 'selected' : ''}>${l}</option>`).join('');
+
+  const cardChecks = cards.length
+    ? cards.map(c => `<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;"><input type="checkbox" class="eb-reveal" value="${c.id}" ${(step.reveal_card_ids || []).includes(c.id) ? 'checked' : ''}> ${escapeHtml(c.title || c.id)}</label>`).join('')
+    : '<div class="muted" style="font-size:12px;">Ingen kort i biblioteket ennå.</div>';
+
+  const mgOptions = `<option value="">— ingen —</option>` + mgs.map(m => `<option value="${m.id}" ${step.unlock_minigame_id === m.id ? 'selected' : ''}>${escapeHtml(m.title || m.id)}</option>`).join('');
+
+  openModal({
+    title: isNew ? 'Nytt steg' : 'Rediger steg',
+    size: 'lg',
+    body: `
+      <div class="field-row">
+        <div class="field"><label class="field-label">Type</label>
+          <select id="eb-step-type" onchange="ebStepTypeToggle(this.value)">${typeOptions}</select></div>
+        <div class="field"><label class="field-label">Tittel</label><input id="eb-step-title" type="text" value="${escapeHtml(step.title)}"></div>
+      </div>
+      <div class="field"><label class="field-label">Tekst / oppgave</label><textarea id="eb-step-body" rows="3">${escapeHtml(step.body)}</textarea></div>
+      <div class="field"><label class="field-label">Media-URL (valgfritt)</label><input id="eb-step-media" type="text" value="${escapeHtml(step.media_url || '')}" placeholder="https://…"></div>
+
+      <div id="eb-step-password-fields" style="display:${step.type === 'password' ? 'block' : 'none'};">
+        <div class="field-row">
+          <div class="field"><label class="field-label">Passord (kode)</label><input id="eb-step-password" type="text" value="${escapeHtml(step.password || '')}" class="col-mono" placeholder="1234"></div>
+          <div class="field"><label class="field-label">Poeng</label><input id="eb-step-points" type="number" min="0" value="${step.points || 0}"></div>
+        </div>
+        <div class="field"><label class="field-label">Avslører kort</label><div style="display:flex;flex-direction:column;gap:6px;max-height:170px;overflow:auto;padding:6px;border:1px solid var(--bg3);border-radius:6px;">${cardChecks}</div></div>
+      </div>
+
+      <div id="eb-step-minigame-fields" style="display:${step.type === 'minigame' ? 'block' : 'none'};">
+        <div class="field"><label class="field-label">Minispill</label><select id="eb-step-minigame">${mgOptions}</select></div>
+      </div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre steg</button>`,
+    onSubmit: () => {
+      const type = $('#eb-step-type').value;
+      const updated = {
+        id: step.id,
+        type,
+        title: $('#eb-step-title').value.trim(),
+        body: $('#eb-step-body').value.trim(),
+        media_url: $('#eb-step-media').value.trim(),
+        password: type === 'password' ? $('#eb-step-password').value.trim() : '',
+        points: type === 'password' ? (parseInt($('#eb-step-points').value, 10) || 0) : 0,
+        reveal_card_ids: type === 'password' ? $$('.eb-reveal').filter(x => x.checked).map(x => x.value) : [],
+        unlock_minigame_id: type === 'minigame' ? $('#eb-step-minigame').value : '',
+      };
+      if (isNew) ebb.config.flow[si].steps.push(updated);
+      else ebb.config.flow[si].steps[ti] = updated;
+      closeModal(); renderEbBuilder();
+    },
+  });
+}
+
+function ebStepTypeToggle(type) {
+  const pw = $('#eb-step-password-fields');
+  const mg = $('#eb-step-minigame-fields');
+  if (pw) pw.style.display = type === 'password' ? 'block' : 'none';
+  if (mg) mg.style.display = type === 'minigame' ? 'block' : 'none';
+}
+
+function ebCardModal(ci) {
+  const isNew = ci === null || ci === undefined;
+  const card = isNew ? { id: ebUid('card'), title: '', image_url: '', body: '' } : ebb.config.cards[ci];
+  openModal({
+    title: isNew ? 'Nytt kort' : 'Rediger kort',
+    body: `
+      <div class="field"><label class="field-label">Tittel</label><input id="eb-card-title" type="text" value="${escapeHtml(card.title)}"></div>
+      <div class="field"><label class="field-label">Tekst</label><textarea id="eb-card-body" rows="3">${escapeHtml(card.body)}</textarea></div>
+      <div class="field"><label class="field-label">Bilde-URL (valgfritt)</label><input id="eb-card-image" type="text" value="${escapeHtml(card.image_url)}" placeholder="https://…">
+        <span class="field-hint">Opplasting via Dropbox kobles på i bilde-sporet.</span></div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre kort</button>`,
+    onSubmit: () => {
+      const updated = { id: card.id, title: $('#eb-card-title').value.trim(), body: $('#eb-card-body').value.trim(), image_url: $('#eb-card-image').value.trim() };
+      if (isNew) ebb.config.cards.push(updated);
+      else ebb.config.cards[ci] = updated;
+      closeModal(); renderEbBuilder();
+    },
+  });
+}
+
+function ebDeleteCard(ci) {
+  const card = ebb.config.cards[ci];
+  // Fjern referanser fra steg
+  ebb.config.flow.forEach(st => (st.steps || []).forEach(s => {
+    if (Array.isArray(s.reveal_card_ids)) s.reveal_card_ids = s.reveal_card_ids.filter(id => id !== card.id);
+  }));
+  ebb.config.cards.splice(ci, 1);
+  renderEbBuilder();
+}
+
+function ebMinigameModal(mi) {
+  const isNew = mi === null || mi === undefined;
+  const mg = isNew ? { id: ebUid('mg'), title: '', type: '' } : ebb.config.minigames[mi];
+  openModal({
+    title: isNew ? 'Nytt minispill' : 'Rediger minispill',
+    body: `
+      <div class="field"><label class="field-label">Tittel</label><input id="eb-mg-title" type="text" value="${escapeHtml(mg.title)}"></div>
+      <div class="field"><label class="field-label">Type / nøkkel</label><input id="eb-mg-type" type="text" value="${escapeHtml(mg.type)}" class="col-mono" placeholder="f.eks. puzzle, cipher">
+        <span class="field-hint">Selve minispill-implementasjonen kobles på senere.</span></div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Avbryt</button><button class="btn" onclick="modalSubmit()">Lagre</button>`,
+    onSubmit: () => {
+      const updated = { id: mg.id, title: $('#eb-mg-title').value.trim(), type: $('#eb-mg-type').value.trim() };
+      if (isNew) ebb.config.minigames.push(updated);
+      else ebb.config.minigames[mi] = updated;
+      closeModal(); renderEbBuilder();
+    },
+  });
+}
+
+function ebDeleteMinigame(mi) {
+  const mg = ebb.config.minigames[mi];
+  ebb.config.flow.forEach(st => (st.steps || []).forEach(s => { if (s.unlock_minigame_id === mg.id) s.unlock_minigame_id = ''; }));
+  ebb.config.minigames.splice(mi, 1);
+  renderEbBuilder();
+}
+
+async function ebSaveAll() {
+  try {
+    await api(`/api/concepts/${ebb.conceptId}`, { method: 'PATCH', body: { config: ebb.config } });
+    showToast('Spillflyt lagret', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
 
 /* ════════════════════════════════════════════════════════
    KONSEPT-TILGANGER (lisens + credits per bedrift)
