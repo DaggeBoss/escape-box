@@ -2066,14 +2066,24 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;align-items:center;gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;">
+  const alignIcon = (lines) => `<svg width="15" height="13" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
+  const alignBtn = (a, lines) => `<button onclick="ebElAlign('${id}','${a}')" class="btn btn-sm ${el.align === a ? '' : 'btn-ghost'}" title="Align ${a}" style="padding:0 6px;display:inline-flex;align-items:center;color:${el.align === a ? '#fff' : 'var(--ink2)'};">${alignIcon(lines)}</button>`;
+  const swatch = (val, css) => `<button onclick="ebElField('${id}','color','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(el.color || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;"></button>`;
+  const palette = [
+    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
+    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
+  ].map(([v, css]) => swatch(v, css)).join('');
+  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;align-items:center;gap:3px;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;flex-wrap:wrap;max-width:100%;">
       <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
       <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
       <button onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
-      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Text color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
-      <button onclick="ebElAlign('${id}','left')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯇</button>
-      <button onclick="ebElAlign('${id}','center')" class="btn btn-sm btn-ghost" style="padding:0 6px;">≡</button>
-      <button onclick="ebElAlign('${id}','right')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯈</button>
+      <span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>
+      ${alignBtn('left', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>')}
+      ${alignBtn('center', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>')}
+      ${alignBtn('right', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>')}
+      <span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>
+      ${palette}
+      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Custom color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
     </div>`;
   return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${callout}">
     ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
