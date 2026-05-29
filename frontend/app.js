@@ -1416,8 +1416,8 @@ function ebPvPassword(elId) {
   if (!inp || !el) return;
   if (el.code && inp.value.trim().toUpperCase() === String(el.code).toUpperCase()) {
     st.pwOk.add(elId); st.score += el.points || 0; st.enteredCodes.add(String(el.code).toUpperCase());
-    showToast('Correct code', 'success'); ebPvRender();
-  } else showToast('Wrong code — try again', 'error');
+    showToast('Correct', 'success'); ebPvRender();
+  } else showToast('Wrong password — try again', 'error');
 }
 function ebPvRead(cardId) { ebPvState.readCards.add(cardId); ebPvRender(); }
 function ebPvToggle(cardId) {
@@ -1598,7 +1598,7 @@ function ebPvWorkCard(card, done) {
     <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
       <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.05em;font-size:15px;flex:1;">${escapeHtml(ebT(card.title) || 'Card')}</span>
       ${card.code ? `<span class="col-mono" style="font-size:11px;opacity:0.85;">${escapeHtml(card.code)}</span>` : ''}
-      ${isDone ? '<span style="font-size:15px;">✓</span>' : ''}
+      ${isDone ? '<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:12px;">✓ Completed</span>' : ''}
       <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.06em;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.55);border-radius:7px;padding:4px 11px;white-space:nowrap;">${open ? 'Close ▾' : 'Open ▸'}</span>
     </div>`;
   let body = '';
@@ -1686,7 +1686,7 @@ function ebPvElInner(el) {
     const inner = ok
       ? `<div style="color:var(--green);font-weight:600;font-size:14px;">✓ ${escapeHtml(ebT(el.label) || 'Unlocked')}</div>`
       : `${ebT(el.label) ? `<div style="font-size:14px;margin-bottom:8px;color:var(--ink2);white-space:pre-wrap;">${escapeHtml(ebT(el.label))}</div>` : ''}
-         <div style="display:flex;gap:6px;"><input id="eb-pv-pw-${el.id}" class="col-mono" maxlength="6" style="flex:1;text-transform:uppercase;" placeholder="ABCD"><button class="btn btn-sm" onclick="ebPvPassword('${el.id}')">OK</button></div>
+         <div style="display:flex;gap:6px;"><input id="eb-pv-pw-${el.id}" style="flex:1;" placeholder="${escapeHtml(ebT(el.placeholder) || '')}"><button class="btn btn-sm" onclick="ebPvPassword('${el.id}')">OK</button></div>
          ${el.points ? `<div class="muted" style="font-size:11px;margin-top:4px;">${el.points} p</div>` : ''}`;
     return `<div style="padding:8px 10px;">${inner}</div>`;
   }
