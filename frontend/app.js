@@ -1239,6 +1239,11 @@ function ebNormalizeElement(e) {
     codes: Array.isArray(e.codes) ? e.codes : [],
     size: e.size || 15,
     align: e.align || 'left',
+    bold: !!e.bold,
+    color: e.color || '',
+    headerOn: e.headerOn !== undefined ? !!e.headerOn : !!ebT(e.header),
+    header: ebToLang(e.header),
+    headerBg: e.headerBg || '',
   };
 }
 
@@ -1635,17 +1640,28 @@ function ebPvScaleCanvases() {
 }
 
 function ebPvEl(el) {
-  const st = ebPvState;
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
+  const header = el.headerOn ? ebPvHeaderBar(el) : '';
+  return `<div style="${pos}display:flex;flex-direction:column;">${header}<div style="flex:1;min-height:0;overflow:auto;">${ebPvElInner(el)}</div></div>`;
+}
+
+function ebPvHeaderBar(el) {
+  const bg = el.headerBg;
+  const style = bg ? `background:${bg};color:#fff;` : `color:var(--ink);border-bottom:1px solid var(--rule);`;
+  return `<div style="flex:0 0 auto;padding:6px 10px;font-weight:600;font-size:14px;${style}">${escapeHtml(ebT(el.header))}</div>`;
+}
+
+function ebPvElInner(el) {
+  const st = ebPvState;
   if (el.type === 'image') {
-    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
+    return el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
   }
   if (el.type === 'link') {
-    return `<div style="${pos}padding:4px 6px;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
+    return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
   }
   if (el.type === 'unlock') {
     const codes = (el.codes || []).map(c => `<span class="badge amber col-mono">${escapeHtml(c)}</span>`).join(' ');
-    return `<div style="${pos}padding:8px 10px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:6px;">
+    return `<div style="padding:8px 10px;height:100%;box-sizing:border-box;background:var(--amber-bg);border:1px solid var(--amber);border-radius:6px;">
       <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:10px;letter-spacing:0.1em;color:var(--amber);margin-bottom:5px;">Open physical cards</div>
       ${el.label && ebT(el.label) ? `<div style="font-size:12px;color:var(--ink2);margin-bottom:6px;">${escapeHtml(ebT(el.label))}</div>` : ''}
       <div style="display:flex;flex-wrap:wrap;gap:5px;">${codes || '<span class="muted" style="font-size:12px;">(no codes)</span>'}</div>
@@ -1660,7 +1676,7 @@ function ebPvEl(el) {
         ? `<div style="padding:8px 11px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:7px;margin-bottom:5px;font-size:14px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(ebT(o.text))}</div>`
         : `<button onclick="ebPvAnswer('${el.id}',${i})" style="display:block;width:100%;text-align:left;padding:8px 11px;border:1px solid var(--rule2);border-radius:7px;margin-bottom:5px;background:var(--paper);color:var(--ink);cursor:pointer;font-size:14px;font-family:var(--font-serif);">${escapeHtml(ebT(o.text))}</button>`)
       .join('');
-    return `<div style="${pos}padding:8px 10px;overflow:auto;">
+    return `<div style="padding:8px 10px;">
       <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:var(--ink);">${escapeHtml(ebT(el.prompt) || 'Question')}${el.points ? ` <span class="muted" style="font-weight:400;font-size:12px;">(${el.points} p)</span>` : ''}</div>
       ${opts}
     </div>`;
@@ -1668,14 +1684,15 @@ function ebPvEl(el) {
   if (el.type === 'password') {
     const ok = st.pwOk.has(el.id);
     const inner = ok
-      ? `<div style="color:var(--green);font-weight:600;font-size:13px;">✓ ${escapeHtml(ebT(el.label) || 'Unlocked')}</div>`
-      : `<div style="font-size:13px;margin-bottom:6px;">${escapeHtml(ebT(el.label) || 'Enter code')}${el.points ? ` <span class="muted" style="font-size:11px;">(${el.points} p)</span>` : ''}</div>
-         <div style="display:flex;gap:6px;"><input id="eb-pv-pw-${el.id}" class="col-mono" maxlength="6" style="flex:1;text-transform:uppercase;" placeholder="ABCD"><button class="btn btn-sm" onclick="ebPvPassword('${el.id}')">OK</button></div>`;
-    return `<div style="${pos}padding:6px 8px;">${inner}</div>`;
+      ? `<div style="color:var(--green);font-weight:600;font-size:14px;">✓ ${escapeHtml(ebT(el.label) || 'Unlocked')}</div>`
+      : `${ebT(el.label) ? `<div style="font-size:14px;margin-bottom:8px;color:var(--ink2);white-space:pre-wrap;">${escapeHtml(ebT(el.label))}</div>` : ''}
+         <div style="display:flex;gap:6px;"><input id="eb-pv-pw-${el.id}" class="col-mono" maxlength="6" style="flex:1;text-transform:uppercase;" placeholder="ABCD"><button class="btn btn-sm" onclick="ebPvPassword('${el.id}')">OK</button></div>
+         ${el.points ? `<div class="muted" style="font-size:11px;margin-top:4px;">${el.points} p</div>` : ''}`;
+    return `<div style="padding:8px 10px;">${inner}</div>`;
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);border-radius:4px;' : '';
-  return `<div style="${pos}padding:6px 8px;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);line-height:1.4;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
+  return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};line-height:1.4;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
 }
 
 
@@ -1802,13 +1819,15 @@ function ebMiniCanvasHtml(card, width) {
 }
 function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
-  if (el.type === 'image') return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
-  if (el.type === 'question') return `<div style="${pos}padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
-  if (el.type === 'password') return `<div style="${pos}padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
-  if (el.type === 'link') return `<div style="${pos}padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
-  if (el.type === 'unlock') return `<div style="${pos}padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
-  const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  return `<div style="${pos}padding:6px 8px;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`;
+  const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:600;font-size:13px;${el.headerBg ? `background:${el.headerBg};color:#fff;` : 'color:var(--ink);border-bottom:1px solid var(--rule);'}">${escapeHtml(ebT(el.header))}</div>` : '';
+  let inner;
+  if (el.type === 'image') inner = el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
+  else if (el.type === 'question') inner = `<div style="padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
+  else if (el.type === 'password') inner = `<div style="padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
+  else if (el.type === 'link') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
+  else if (el.type === 'unlock') inner = `<div style="padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
+  else { const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : ''; inner = `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`; }
+  return `<div style="${pos}display:flex;flex-direction:column;">${header}<div style="flex:1;min-height:0;overflow:hidden;">${inner}</div></div>`;
 }
 
 /* ─── Drag & drop ───────────────────────────────────────── */
@@ -2056,13 +2075,21 @@ function ebDesignerRender() {
 function ebElBox(el) {
   const id = el.id;
   const grip = `<div onpointerdown="ebElDown(event,'${id}')" title="Drag to move" style="position:absolute;top:-10px;left:-10px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;background:var(--ink3);color:#fff;border-radius:5px;cursor:move;font-size:11px;z-index:4;">⠿</div>`;
+  const hBtn = `<button onpointerdown="event.stopPropagation()" onclick="ebElToggleHeader('${id}')" title="Header on/off" style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);height:20px;padding:0 9px;background:${el.headerOn ? 'var(--blue)' : 'var(--ink3)'};color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:10px;z-index:4;">H</button>`;
   const del = `<button onpointerdown="event.stopPropagation()" onclick="ebDeleteEl('${id}')" title="Delete" style="position:absolute;top:-10px;right:-10px;width:20px;height:20px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;z-index:4;">×</button>`;
   const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
+  const headerStrip = el.headerOn ? `
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:3px 6px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
+      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="flex:1;outline:none;font-weight:600;font-size:13px;color:${el.headerBg ? '#fff' : 'var(--ink)'};">${escapeHtml(ebT(el.header))}</div>
+      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" title="Header background" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
+      <button onclick="ebElField('${id}','headerBg','')" title="No background" style="background:rgba(255,255,255,0.7);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;">∅</button>
+    </div>` : '';
   return `
     <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
-      ${grip}${del}${resize}
-      <div style="width:100%;height:100%;box-sizing:border-box;outline:1px dashed var(--rule2);background:rgba(255,255,255,0.55);overflow:auto;">
-        ${ebElEdit(el)}
+      ${grip}${hBtn}${del}${resize}
+      <div style="width:100%;height:100%;box-sizing:border-box;outline:1px dashed var(--rule2);background:rgba(255,255,255,0.55);overflow:hidden;display:flex;flex-direction:column;">
+        ${headerStrip}
+        <div style="flex:1;min-height:0;overflow:auto;position:relative;">${ebElEdit(el)}</div>
       </div>
     </div>`;
 }
@@ -2115,15 +2142,17 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;">
+  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;align-items:center;gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;">
       <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
       <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
+      <button onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
+      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Text color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
       <button onclick="ebElAlign('${id}','left')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯇</button>
       <button onclick="ebElAlign('${id}','center')" class="btn btn-sm btn-ghost" style="padding:0 6px;">≡</button>
       <button onclick="ebElAlign('${id}','right')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯈</button>
     </div>`;
   return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${callout}">
-    ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;overflow:auto;`)}
+    ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
     ${fmt}
   </div>`;
 }
@@ -2140,6 +2169,14 @@ function ebElStr(elId, field, v) { const el = ebElGet(elId); if (!el) return; el
 function ebElCodes(elId, v) { const el = ebElGet(elId); if (!el) return; el.codes = v.split(',').map(s => s.trim().toUpperCase()).filter(Boolean); }
 function ebElSize(elId, d) { const el = ebElGet(elId); if (!el) return; el.size = Math.max(9, Math.min(48, (el.size || 15) + d)); ebDesignerRender(); }
 function ebElAlign(elId, a) { const el = ebElGet(elId); if (!el) return; el.align = a; ebDesignerRender(); }
+function ebElBold(elId) { const el = ebElGet(elId); if (!el) return; el.bold = !el.bold; ebDesignerRender(); }
+function ebElField(elId, field, v) { const el = ebElGet(elId); if (!el) return; el[field] = v; ebDesignerRender(); }
+function ebElToggleHeader(elId) {
+  const el = ebElGet(elId); if (!el) return;
+  el.headerOn = !el.headerOn;
+  if (el.headerOn && !ebT(el.header)) el.header = { [EB_LANG]: 'Header' };
+  ebDesignerRender();
+}
 
 /* drag & resize (canvas is 1:1, so client px = design px) */
 function ebElDown(ev, id) {
