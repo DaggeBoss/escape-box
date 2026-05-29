@@ -163,6 +163,44 @@ async function uploadFile(fileBuffer, dropboxPath, overwrite = false) {
   try { return JSON.parse(result.body); } catch { return result.body; }
 }
 
+// ─── Nedlasting (rå bytes) ──────────────────────────────────
+// Henter filinnholdet direkte fra Dropbox. Brukes for å servere
+// minispill-HTML via backend (iframe srcdoc) uten å være avhengig av
+// shared-link content-type/disposition.
+function downloadFileAttempt(dropboxPath, token) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'content.dropboxapi.com',
+      path: '/2/files/download',
+      method: 'POST',
+      headers: dropboxHeaders({
+        'Authorization': `Bearer ${token}`,
+        'Dropbox-API-Arg': asciiSafeJson({ path: dropboxPath }),
+      }),
+    }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ statusCode: res.statusCode, buffer: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function downloadFile(dropboxPath) {
+  let token = await getAccessToken();
+  let result = await downloadFileAttempt(dropboxPath, token);
+  if (result.statusCode === 401) {
+    invalidateAccessToken();
+    token = await getAccessToken();
+    result = await downloadFileAttempt(dropboxPath, token);
+  }
+  if (result.statusCode !== 200) {
+    throw new Error(`Dropbox download feilet (${result.statusCode}) for ${dropboxPath}: ${result.buffer.toString().slice(0, 200)}`);
+  }
+  return result.buffer;
+}
+
 // ─── Shared links (permanente offentlige URL-er) ───────────
 async function getOrCreateSharedLink(dropboxPath) {
   const token = await getAccessToken();
@@ -334,6 +372,7 @@ module.exports = {
   asciiSafeJson,
   // Filer
   uploadFile,
+  downloadFile,
   deleteFile,
   // Mapper
   ensureFolder,

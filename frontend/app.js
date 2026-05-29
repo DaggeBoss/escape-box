@@ -193,6 +193,31 @@ async function uploadImage(file, opts = {}) {
   });
 }
 
+/* uploadHtmlFile(file, { scenario_id }) — laster opp et minispill (.html).
+   Returnerer { path, url, filename }. */
+async function uploadHtmlFile(file, opts = {}) {
+  if (!file) throw new Error('Ingen fil oppgitt');
+  if (!opts.scenario_id) throw new Error('scenario_id er påkrevd');
+
+  const form = new FormData();
+  form.append('file', file, file.name || 'minigame.html');
+  form.append('scenario_id', String(opts.scenario_id));
+  if (opts.overwrite) form.append('overwrite', 'true');
+
+  const res = await fetch(API + '/api/uploads/html', {
+    method: 'POST',
+    headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    body: form,
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) {
+    if (res.status === 401) { showToast('Økten er utløpt — logg inn på nytt', 'warn', 4000); logout(); }
+    throw new Error((data && data.error) || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 /* deleteImage(path, url?) — sletter bildet fra Dropbox.
    url er valgfri — hvis du har den, sendes den med så shared link
    blir revoket samtidig (best practice).
@@ -1252,6 +1277,11 @@ function ebNormalizeElement(e) {
     headerOn: e.headerOn !== undefined ? !!e.headerOn : !!ebT(e.header),
     header: ebToLang(e.header),
     headerBg: e.headerBg || '',
+    // minigame (egen HTML-boks, åpnes i fullskjerm-overlay)
+    mg_url: e.mg_url || '',
+    mg_path: e.mg_path || '',
+    mg_label: ebToLang(e.mg_label),
+    mg_code: e.mg_code || '',
   };
 }
 
@@ -1311,6 +1341,7 @@ function ebExit() { ebb = null; goto('concepts'); }
    Samme flyt-motor gjenbrukes senere i play.html (med backend).
    ──────────────────────────────────────────────────────── */
 let ebPvState = null;
+let ebPvMgCurrent = null;
 
 function ebOpenPreview() {
   if (!ebb) return;
@@ -1324,6 +1355,7 @@ function ebOpenPreview() {
     enteredCodes: new Set(),     // codes registered (password fields)
     readCards: new Set(),        // info-only cards acknowledged via "read"
     cardScore: {},               // cardId -> points earned from that card
+    mgSolved: new Set(),         // minigame element ids solved
     openCards: new Set(),        // UI open/closed state
     seen: new Set(),             // cards auto-opened once on reveal
   };
@@ -1335,6 +1367,7 @@ function ebOpenPreview() {
 
 function ebPvClose() {
   if (ebPvState && ebPvState.timer) clearInterval(ebPvState.timer);
+  ebPvCloseMinigame();
   const ov = document.getElementById('eb-pv-overlay');
   if (ov) ov.remove();
   ebPvState = null;
@@ -1376,8 +1409,12 @@ function ebPvCardComplete(card) {
   const els = card.elements || [];
   const qs = els.filter(e => e.type === 'question');
   const pws = els.filter(e => e.type === 'password');
-  if (qs.length + pws.length > 0) {
-    return qs.every(e => st.answeredCorrect.has(e.id)) && pws.every(e => st.pwOk.has(e.id));
+  // Minispill teller som oppgave når det gir poeng eller låser en kode.
+  const mgs = els.filter(e => e.type === 'minigame' && e.mg_url && (e.mg_code || e.points));
+  if (qs.length + pws.length + mgs.length > 0) {
+    return qs.every(e => st.answeredCorrect.has(e.id))
+        && pws.every(e => st.pwOk.has(e.id))
+        && mgs.every(e => st.mgSolved.has(e.id));
   }
   return st.readCards.has(card.id); // info-only card needs explicit "read"
 }
@@ -1439,6 +1476,72 @@ function ebPvToggle(cardId) {
   const o = ebPvState.openCards;
   if (o.has(cardId)) o.delete(cardId); else o.add(cardId);
   ebPvRender();
+}
+
+/* ─── Minigame overlay (egen HTML-boks i fullskjerm) ─────── */
+function ebPvOpenMinigame(elId) {
+  const el = ebPvFindEl(elId);
+  if (!el || !el.mg_url) return;
+  ebPvMgCurrent = elId;
+
+  let ov = document.getElementById('eb-mg-overlay');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'eb-mg-overlay'; document.body.appendChild(ov); }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(20,16,12,0.92);display:flex;flex-direction:column;';
+  const label = escapeHtml(ebT(el.mg_label) || 'Minigame');
+  // Hent HTML via backend-proxy og kjør i sandbox-iframe (srcdoc).
+  const src = `${API}/api/uploads/html?path=${encodeURIComponent(el.mg_path || '')}`;
+  ov.innerHTML = `
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--ink);color:#fff;">
+      <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:15px;flex:1;">🎮 ${label}</span>
+      <button onclick="ebPvCloseMinigame()" class="btn btn-sm" style="background:var(--red);border-color:var(--red);">✕ Close</button>
+    </div>
+    <div style="flex:1;min-height:0;background:#fff;">
+      <iframe id="eb-mg-frame" sandbox="allow-scripts allow-forms allow-popups allow-modals"
+              style="width:100%;height:100%;border:none;display:block;"></iframe>
+    </div>`;
+
+  const frame = document.getElementById('eb-mg-frame');
+  // Last HTML-innhold inn som srcdoc (uavhengig av Dropbox content-type).
+  fetch(src)
+    .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(html => { frame.srcdoc = html; })
+    .catch(e => { frame.srcdoc = `<body style="font-family:sans-serif;padding:24px;color:#b00;">Kunne ikke laste minispill: ${escapeHtml(e.message)}</body>`; });
+
+  window.addEventListener('message', ebPvMgMessage);
+}
+
+function ebPvCloseMinigame() {
+  window.removeEventListener('message', ebPvMgMessage);
+  ebPvMgCurrent = null;
+  const ov = document.getElementById('eb-mg-overlay');
+  if (ov) ov.remove();
+  ebPvRender();
+}
+
+// Minispillet rapporterer via postMessage:
+//   { type:'minigame_solved' }            → marker løst, gi poeng, lås kode, lukk
+//   { type:'minigame_score', points:N }   → legg til N poeng (uten å lukke)
+//   { type:'minigame_close' }             → bare lukk
+function ebPvMgMessage(ev) {
+  const data = ev && ev.data;
+  if (!data || typeof data !== 'object') return;
+  const st = ebPvState;
+  const elId = ebPvMgCurrent;
+  const el = elId ? ebPvFindEl(elId) : null;
+  if (data.type === 'minigame_solved' && el) {
+    if (!st.mgSolved.has(elId)) {
+      st.mgSolved.add(elId);
+      ebPvAddScore(elId, el.points || 0);
+      if (el.mg_code) st.enteredCodes.add(String(el.mg_code).toUpperCase());
+    }
+    showToast('Minigame solved!', 'success', 3000);
+    ebPvCloseMinigame();
+  } else if (data.type === 'minigame_score' && el) {
+    ebPvAddScore(elId, parseInt(data.points, 10) || 0);
+    ebPvRender();
+  } else if (data.type === 'minigame_close') {
+    ebPvCloseMinigame();
+  }
 }
 
 /* ─── Render ────────────────────────────────────────────── */
@@ -1558,7 +1661,7 @@ function ebPvWorkCard(card, done) {
     </div>`;
   let body = '';
   if (open) {
-    const completable = (card.elements || []).some(e => e.type === 'question' || e.type === 'password');
+    const completable = (card.elements || []).some(e => e.type === 'question' || e.type === 'password' || (e.type === 'minigame' && e.mg_url && (e.mg_code || e.points)));
     const readBtn = (!completable && !isDone)
       ? `<div style="padding:10px 14px;text-align:right;border-top:1px solid var(--rule);"><button class="btn btn-sm" onclick="ebPvRead('${card.id}')">Mark as read</button></div>`
       : '';
@@ -1610,6 +1713,18 @@ function ebPvElInner(el) {
   const st = ebPvState;
   if (el.type === 'image') {
     return el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
+  }
+  if (el.type === 'minigame') {
+    const solved = st.mgSolved && st.mgSolved.has(el.id);
+    const label = ebT(el.mg_label) || 'Open minigame';
+    if (!el.mg_url) {
+      return `<div style="padding:8px 10px;height:100%;box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:12px;border:1px dashed var(--rule2);border-radius:6px;">No minigame uploaded</div>`;
+    }
+    return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;display:flex;align-items:center;">
+      <button onclick="ebPvOpenMinigame('${el.id}')" class="btn btn-sm" style="width:100%;${solved ? 'background:var(--green);border-color:var(--green);' : ''}">
+        ${solved ? '✓ ' : '🎮 '}${escapeHtml(label)}${el.points && solved ? ` · ${el.points} p` : ''}
+      </button>
+    </div>`;
   }
   if (el.type === 'link') {
     return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
@@ -1779,6 +1894,7 @@ function ebMiniEl(el) {
   else if (el.type === 'password') inner = `<div style="padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
   else if (el.type === 'link') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
   else if (el.type === 'unlock') inner = `<div style="padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
+  else if (el.type === 'minigame') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🎮 ${escapeHtml(ebT(el.mg_label) || 'Minigame')}${el.mg_url ? '' : ' (no file)'}</div>`;
   else { const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : ''; inner = `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`; }
   return `<div style="${pos}display:flex;flex-direction:column;">${header}<div style="flex:1;min-height:0;overflow:hidden;">${inner}</div></div>`;
 }
@@ -1959,7 +2075,8 @@ function ebDesignerRender() {
   if (!root || !c) { renderEbBuilder(); return; }
   const tools = [
     ['text', 'Text'], ['info', 'Info'], ['question', 'Question'],
-    ['password', 'Password'], ['link', 'Link'], ['image', 'Image'], ['unlock', 'Open cards'],
+    ['password', 'Password'], ['link', 'Link'], ['image', 'Image'],
+    ['minigame', 'Minigame'], ['unlock', 'Open cards'],
   ].map(([t, label]) => `<button class="btn btn-sm btn-secondary" onclick="ebAddElement('${t}')">+ ${label}</button>`).join(' ');
 
   root.innerHTML = `
@@ -2002,11 +2119,17 @@ function ebElBox(el) {
   const hBtn = `<button onpointerdown="event.stopPropagation()" onclick="ebElToggleHeader('${id}')" title="Header on/off" style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);height:20px;padding:0 9px;background:${el.headerOn ? 'var(--blue)' : 'var(--ink3)'};color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:10px;z-index:4;">H</button>`;
   const del = `<button onpointerdown="event.stopPropagation()" onclick="ebDeleteEl('${id}')" title="Delete" style="position:absolute;top:-10px;right:-10px;width:20px;height:20px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;z-index:4;">×</button>`;
   const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
+  const hSwatch = (val, css) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','${val}')" title="${val}" style="width:16px;height:16px;border-radius:50%;border:2px solid ${(el.headerBg || '') === val ? '#fff' : 'rgba(255,255,255,0.4)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
+  const hPalette = [
+    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
+    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
+  ].map(([v, css]) => hSwatch(v, css)).join('');
   const headerStrip = el.headerOn ? `
-    <div style="flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:3px 6px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
-      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="flex:1;outline:none;font-weight:600;font-size:13px;color:${el.headerBg ? '#fff' : 'var(--ink)'};">${escapeHtml(ebT(el.header))}</div>
-      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" title="Header background" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
-      <button onclick="ebElField('${id}','headerBg','')" title="No background" style="background:rgba(255,255,255,0.7);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;">∅</button>
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:3px 6px;flex-wrap:wrap;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
+      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="flex:1;min-width:60px;outline:none;font-weight:600;font-size:13px;color:${el.headerBg ? '#fff' : 'var(--ink)'};">${escapeHtml(ebT(el.header))}</div>
+      ${hPalette}
+      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" title="Custom color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
+      <button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','')" title="No background" style="background:rgba(255,255,255,0.7);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
     </div>` : '';
   return `
     <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
@@ -2062,6 +2185,23 @@ function ebElEdit(el) {
     return `<div style="padding:6px 8px;">
       ${ce('label', escapeHtml(ebT(el.label)), 'font-size:12px;color:var(--amber);margin-bottom:4px;')}
       <input class="col-mono" value="${escapeHtml((el.codes || []).join(', '))}" onchange="ebElCodes('${id}',this.value)" placeholder="ABCD, EFGH" style="width:100%;font-size:12px;text-transform:uppercase;">
+    </div>`;
+  }
+  if (el.type === 'minigame') {
+    const has = !!el.mg_url;
+    return `<div style="padding:6px 8px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
+        <span style="font-size:13px;color:var(--blue);">🎮</span>
+        ${ce('mg_label', escapeHtml(ebT(el.mg_label)) || 'Open minigame', 'flex:1;font-size:13px;border:1px solid var(--rule);border-radius:5px;padding:3px 6px;')}
+      </div>
+      <div class="flex-gap" style="align-items:center;margin-bottom:5px;">
+        <button onclick="ebPickElHtml('${id}')" class="btn btn-sm btn-secondary">${has ? 'Replace .html' : 'Upload .html'}</button>
+        ${has ? `<span class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;" title="${escapeHtml(el.mg_url)}">✓ uploaded</span>` : '<span class="muted" style="font-size:11px;">no file yet</span>'}
+      </div>
+      <div class="flex-gap" style="align-items:center;font-size:11px;color:var(--ink3);">
+        <span>unlock code <input class="col-mono" value="${escapeHtml(el.mg_code)}" onchange="ebElStr('${id}','mg_code',this.value)" placeholder="optional" style="width:84px;text-transform:uppercase;"></span>
+        <span>pts <input type="number" value="${el.points || 0}" onchange="ebElNum('${id}','points',this.value)" style="width:50px;"></span>
+      </div>
     </div>`;
   }
   // text / info
@@ -2173,7 +2313,8 @@ function ebAddElement(type) {
   const c = ebCardById(ebb.designId); if (!c) return;
   const sizes = {
     text: { w: 320, h: 90 }, info: { w: 340, h: 90 }, question: { w: 380, h: 170 },
-    password: { w: 280, h: 80 }, link: { w: 260, h: 64 }, image: { w: 240, h: 170 }, unlock: { w: 320, h: 80 },
+    password: { w: 280, h: 80 }, link: { w: 260, h: 64 }, image: { w: 240, h: 170 },
+    minigame: { w: 300, h: 90 }, unlock: { w: 320, h: 80 },
   };
   const s = sizes[type] || { w: 240, h: 80 };
   const el = ebNormalizeElement({ id: ebUid('el'), type, x: 24, y: 24, w: s.w, h: s.h });
@@ -2206,8 +2347,28 @@ function ebPickElImage(elId) {
   inp.click();
 }
 
-
-// Set card active from start (clear conditions)
+function ebPickElHtml(elId) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.html,.htm,text/html';
+  inp.onchange = async () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    if (!/\.html?$/i.test(file.name)) { showToast('Velg en .html-fil', 'error'); return; }
+    showToast('Uploading minigame…', 'info');
+    try {
+      const res = await uploadHtmlFile(file, { scenario_id: ebb.conceptId });
+      const el = ebElGet(elId);
+      if (el && res && res.url) {
+        el.mg_url = res.url;
+        el.mg_path = res.path || '';
+        showToast('Minigame uploaded', 'success');
+      }
+      ebDesignerRender();
+    } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
+  };
+  inp.click();
+}
 function ebReqFromStart(id) {
   const c = ebCardById(id); if (!c) return;
   c.requires.conditions = [];
