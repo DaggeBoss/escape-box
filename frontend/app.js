@@ -1553,8 +1553,8 @@ function ebPvWorkCard(card, done) {
     <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
       <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.05em;font-size:15px;flex:1;">${escapeHtml(ebT(card.title) || 'Card')}</span>
       ${card.code ? `<span class="col-mono" style="font-size:11px;opacity:0.85;">${escapeHtml(card.code)}</span>` : ''}
-      ${isDone ? `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:12px;">✓ Completed${earned ? ` · ${earned} p` : ''}</span>` : ''}
-      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.06em;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.55);border-radius:7px;padding:4px 11px;white-space:nowrap;">${open ? 'Close ▾' : 'Open ▸'}</span>
+      ${isDone ? `<span style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:12px;">✓ Completed${earned ? `<span style="border:1px solid rgba(255,255,255,0.6);border-radius:6px;padding:2px 7px;font-size:11px;">${earned} p</span>` : ''}</span>` : ''}
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.06em;background:${isDone ? 'var(--red)' : 'rgba(255,255,255,0.2)'};border:1px solid ${isDone ? 'var(--red)' : 'rgba(255,255,255,0.55)'};border-radius:7px;padding:4px 11px;white-space:nowrap;">${open ? 'Close ▾' : 'Open ▸'}</span>
     </div>`;
   let body = '';
   if (open) {
@@ -1946,6 +1946,10 @@ function ebSetCanvasHeight(id, value) {
   const c = ebCardById(id); if (!c) return;
   c.canvas.h = Math.max(160, Math.min(1400, parseInt(value, 10) || c.canvas.h));
 }
+function ebSetCanvasHeightLive(id, value) {
+  ebSetCanvasHeight(id, value);
+  ebDesignerRender();
+}
 
 /* ─── Canvas designer (full page, work cards) ───────────── */
 let ebDrag = null;
@@ -1986,7 +1990,12 @@ function ebDesignerRender() {
       <div class="panel-body"><div class="flex-gap" style="flex-wrap:wrap;">${tools}</div></div>
     </div>
     <div class="panel">
-      <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}×${c.canvas.h} — same format as participant view</span></div>
+      <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}px wide (${c.surface === 'ib' ? 'IB' : 'work'}) — same format as participant view</span>
+        <span class="ph-spacer"></span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink3);">Height
+          <input type="number" min="160" max="1400" step="20" value="${c.canvas.h}" onchange="ebSetCanvasHeightLive('${c.id}',this.value)" style="width:78px;text-align:right;">px
+        </span>
+      </div>
       <div class="panel-body" style="overflow:auto;">
         <div style="display:inline-block;">
           <div id="eb-canvas" style="position:relative;width:${c.canvas.w}px;height:${c.canvas.h}px;background:var(--paper);border:1px solid var(--rule2);box-shadow:0 2px 8px var(--shadow);">
