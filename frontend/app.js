@@ -1108,9 +1108,8 @@ async function deleteConcept(id) {
    Modell (config):
      cards[]: { id, title, surface:'work'|'ib', code?, track, order,
                 requires:{ mode:'all'|'any', conditions:[ {type:'card_done',card_id} | {type:'code',code} ] },
-                blocks:[ info|question|unlock ]   (surface 'work')
-                ib:{ intro_text, active_codes[], place_count, correct_codes[],
-                     points_correct, points_wrong, discard_hint, success_text }  (surface 'ib') }
+                canvas:{ w, h }, elements:[ text|info|question|password|link|image|unlock ] }
+   'work' og 'ib' har samme element-modell — IB er bare smalere canvas (300px).
    Et fysisk kort = et kort med `code` satt.
    ──────────────────────────────────────────────────────── */
 
@@ -1214,10 +1213,6 @@ function ebNormalizeCard(c, i) {
     },
     canvas: { w: base.w, h: (c.canvas && c.canvas.h) || base.h },
     elements: Array.isArray(c.elements) ? c.elements.map(ebNormalizeElement) : [],
-    ib: c.ib && typeof c.ib === 'object' ? c.ib : {
-      intro_text: '', active_codes: [], place_count: 1, correct_codes: [],
-      points_correct: 0, points_wrong: 0, discard_hint: '', success_text: '',
-    },
   };
 }
 
@@ -1313,10 +1308,9 @@ function ebOpenPreview() {
     started: false, score: 0,
     answeredCorrect: new Set(),  // question element ids answered correctly
     pwOk: new Set(),             // password element ids entered correctly
-    enteredCodes: new Set(),     // codes registered (IB rounds + password fields)
+    enteredCodes: new Set(),     // codes registered (password fields)
     readCards: new Set(),        // info-only cards acknowledged via "read"
-    ibSolved: new Set(),
-    ibArmed: new Set(),
+    cardScore: {},               // cardId -> points earned from that card
     openCards: new Set(),        // UI open/closed state
     seen: new Set(),             // cards auto-opened once on reveal
   };
@@ -1366,7 +1360,6 @@ function ebPvReqMet(card, done, codes) {
 
 function ebPvCardComplete(card) {
   const st = ebPvState;
-  if (card.surface === 'ib') return st.ibSolved.has(card.id);
   const els = card.elements || [];
   const qs = els.filter(e => e.type === 'question');
   const pws = els.filter(e => e.type === 'password');
@@ -1401,12 +1394,21 @@ function ebPvFindEl(elId) {
   ebPvState.cfg.cards.forEach(c => (c.elements || []).forEach(e => { if (e.id === elId) el = e; }));
   return el;
 }
+function ebPvCardOfEl(elId) {
+  return ebPvState.cfg.cards.find(c => (c.elements || []).some(e => e.id === elId)) || null;
+}
+function ebPvAddScore(elId, pts) {
+  if (!pts) return;
+  ebPvState.score += pts;
+  const card = ebPvCardOfEl(elId);
+  if (card) ebPvState.cardScore[card.id] = (ebPvState.cardScore[card.id] || 0) + pts;
+}
 function ebPvAnswer(elId, optIdx) {
   const st = ebPvState;
   if (st.answeredCorrect.has(elId)) return;
   const el = ebPvFindEl(elId); if (!el) return;
   const opt = (el.options || [])[optIdx];
-  if (opt && opt.correct) { st.answeredCorrect.add(elId); st.score += el.points || 0; ebPvRender(); }
+  if (opt && opt.correct) { st.answeredCorrect.add(elId); ebPvAddScore(elId, el.points || 0); ebPvRender(); }
   else showToast('Wrong answer — try again', 'error');
 }
 function ebPvPassword(elId) {
@@ -1415,7 +1417,7 @@ function ebPvPassword(elId) {
   const el = ebPvFindEl(elId);
   if (!inp || !el) return;
   if (el.code && inp.value.trim().toUpperCase() === String(el.code).toUpperCase()) {
-    st.pwOk.add(elId); st.score += el.points || 0; st.enteredCodes.add(String(el.code).toUpperCase());
+    st.pwOk.add(elId); ebPvAddScore(elId, el.points || 0); st.enteredCodes.add(String(el.code).toUpperCase());
     showToast('Correct', 'success'); ebPvRender();
   } else showToast('Wrong password — try again', 'error');
 }
@@ -1424,31 +1426,6 @@ function ebPvToggle(cardId) {
   const o = ebPvState.openCards;
   if (o.has(cardId)) o.delete(cardId); else o.add(cardId);
   ebPvRender();
-}
-function ebPvIbArm(ibId) { ebPvState.ibArmed.add(ibId); ebPvRender(); }
-function ebPvIbSubmit(ibId) {
-  const st = ebPvState;
-  const card = st.cfg.cards.find(c => c.id === ibId); if (!card) return;
-  const ib = card.ib || {};
-  const n = ib.place_count || (ib.correct_codes || []).length || 0;
-  const entered = [];
-  for (let i = 0; i < n; i++) {
-    const el = document.getElementById(`eb-pv-ibslot-${ibId}-${i}`);
-    if (el && el.value.trim()) entered.push(el.value.trim().toUpperCase());
-  }
-  const correct = (ib.correct_codes || []).map(c => c.toUpperCase());
-  const ok = entered.length === correct.length && correct.every(c => entered.includes(c)) && entered.every(c => correct.includes(c));
-  if (ok) {
-    st.ibSolved.add(ibId);
-    st.score += ib.points_correct || 0;
-    correct.forEach(c => st.enteredCodes.add(c));
-    showToast(ib.success_text ? ib.success_text : 'Correct placement!', 'success', 3500);
-    ebPvRender();
-  } else {
-    st.score -= ib.points_wrong || 0;
-    showToast('Wrong placement — try again', 'error');
-    ebPvRender();
-  }
 }
 
 /* ─── Render ────────────────────────────────────────────── */
@@ -1526,51 +1503,15 @@ function ebPvIntro() {
 
 function ebPvIbColumn(visible, done) {
   const st = ebPvState;
-  const ibCard = st.cfg.cards
-    .filter(c => c.surface === 'ib' && visible.has(c.id) && !done.has(c.id))
-    .sort((a, b) => a.track - b.track || a.order - b.order)[0];
+  const cards = st.cfg.cards
+    .filter(c => c.surface === 'ib' && visible.has(c.id))
+    .sort((a, b) => a.track - b.track || a.order - b.order);
 
   const head = `<div class="page-eyebrow" style="margin-bottom:12px;">Investigation Board</div>`;
-  if (!ibCard) {
+  if (cards.length === 0) {
     return `${head}<div class="muted" style="font-size:13px;">No active round right now. Solve the cards in the work area to unlock the next round.</div>`;
   }
-
-  const ib = ibCard.ib || {};
-  const active = (ib.active_codes || []);
-  const n = ib.place_count || (ib.correct_codes || []).length || 0;
-  const armed = st.ibArmed.has(ibCard.id);
-
-  const activeList = active.length
-    ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px;">${active.map(c => `<span class="badge dark col-mono">${escapeHtml(c)}</span>`).join('')}</div>`
-    : `<div class="muted" style="font-size:12px;margin:8px 0 14px;">(no active codes defined)</div>`;
-
-  let action;
-  if (!armed) {
-    action = `
-      <div class="muted" style="font-size:12px;margin-bottom:6px;">Place <strong>${n}</strong> of the cards on the Investigation Board.</div>
-      <button class="btn btn-sm" onclick="ebPvIbArm('${ibCard.id}')">Place on Investigation Board</button>`;
-  } else {
-    let slots = '';
-    for (let i = 0; i < n; i++) {
-      slots += `<input id="eb-pv-ibslot-${ibCard.id}-${i}" type="text" maxlength="6" placeholder="Code ${i + 1}" class="col-mono" style="width:100%;margin-bottom:8px;text-transform:uppercase;">`;
-    }
-    action = `
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Enter the code on the <strong>${n}</strong> cards you place. The rest go to the discard pile.</div>
-      ${slots}
-      <button class="btn btn-sm" onclick="ebPvIbSubmit('${ibCard.id}')">Confirm placement</button>`;
-  }
-
-  return `
-    ${head}
-    <div class="panel" style="margin:0;">
-      <div class="panel-header" style="font-size:13px;">${escapeHtml(ebT(ibCard.title) || 'IB round')}</div>
-      <div class="panel-body">
-        ${ib.intro_text ? `<p style="font-size:13px;color:var(--ink2);line-height:1.6;margin-top:0;">${escapeHtml(ib.intro_text)}</p>` : ''}
-        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--ink3);">Active cards</div>
-        ${activeList}
-        ${action}
-      </div>
-    </div>`;
+  return head + cards.map(c => ebPvWorkCard(c, done)).join('');
 }
 
 function ebPvWorkArea(visible, done) {
@@ -1594,11 +1535,12 @@ function ebPvWorkCard(card, done) {
   const st = ebPvState;
   const isDone = done.has(card.id);
   const open = st.openCards.has(card.id);
+  const earned = st.cardScore[card.id] || 0;
   const head = `
     <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
       <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.05em;font-size:15px;flex:1;">${escapeHtml(ebT(card.title) || 'Card')}</span>
       ${card.code ? `<span class="col-mono" style="font-size:11px;opacity:0.85;">${escapeHtml(card.code)}</span>` : ''}
-      ${isDone ? '<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:12px;">✓ Completed</span>' : ''}
+      ${isDone ? `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.06em;font-size:12px;">✓ Completed${earned ? ` · ${earned} p` : ''}</span>` : ''}
       <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.06em;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.55);border-radius:7px;padding:4px 11px;white-space:nowrap;">${open ? 'Close ▾' : 'Open ▸'}</span>
     </div>`;
   let body = '';
@@ -1753,10 +1695,8 @@ function ebTileHtml(card) {
   const trig = ebTriggersSummary(card);
   const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">${escapeHtml(card.code)}</span>` : '';
   const fromStart = ((card.requires.conditions || []).length === 0) ? '<span class="badge green">From start</span>' : '';
-  const editClick = isIb ? `ebIbModal('${card.id}')` : `ebOpenDesigner('${card.id}')`;
-  const thumb = isIb
-    ? `<div style="width:256px;height:150px;border:1px solid var(--rule);border-radius:6px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--amber);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">IB round</div>`
-    : ebMiniCanvasHtml(card, 256);
+  const editClick = `ebOpenDesigner('${card.id}')`;
+  const thumb = ebMiniCanvasHtml(card, isIb ? 150 : 256);
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
          style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px;margin-bottom:8px;">
@@ -1772,7 +1712,7 @@ function ebTileHtml(card) {
         ${trig ? `<div><span style="color:var(--amber);">▸ opens:</span> ${trig}</div>` : ''}
       </div>
       <div class="flex-gap">
-        ${isIb ? '' : `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggersModal('${card.id}')">Triggers</button>`}
+        <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggersModal('${card.id}')">Triggers</button>
         <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();ebDeleteCard('${card.id}')">Delete</button>
       </div>
     </div>`;
@@ -1860,7 +1800,7 @@ function ebAddCard(track, surface) {
   const card = ebNormalizeCard({ id: ebUid('card'), surface, track, order: 1e9, title: surface === 'ib' ? 'IB round' : 'New card' }, 0);
   ebb.config.cards.push(card);
   ebNormalizeOrder();
-  if (surface === 'ib') ebIbModal(card.id); else ebOpenDesigner(card.id);
+  ebOpenDesigner(card.id);
 }
 function ebDeleteCard(id) {
   const card = ebCardById(id);
@@ -1903,7 +1843,9 @@ function ebSetCardField(id, field, value) {
 function ebSetCardSurface(id, value) {
   const c = ebCardById(id); if (!c) return;
   c.surface = value === 'ib' ? 'ib' : 'work';
-  if (c.surface === 'ib') ebIbModal(id); else ebTriggersModal(id);
+  // Bytt canvas-bredde til riktig flate (beholder hoyde)
+  c.canvas = { w: EB_CANVAS[c.surface].w, h: (c.canvas && c.canvas.h) || EB_CANVAS[c.surface].h };
+  ebOpenDesigner(id);
 }
 function ebSetReqMode(id, mode) {
   const c = ebCardById(id); if (!c) return;
@@ -1926,18 +1868,8 @@ function ebRemoveCond(id, idx) {
   c.requires.conditions.splice(idx, 1);
   ebReqRefresh();
 }
-function ebSetIbField(id, field, value) {
-  const c = ebCardById(id); if (!c) return;
-  if (['active_codes', 'correct_codes'].includes(field)) {
-    c.ib[field] = value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  } else if (['place_count', 'points_correct', 'points_wrong'].includes(field)) {
-    c.ib[field] = parseInt(value, 10) || 0;
-  } else {
-    c.ib[field] = value;
-  }
-}
 
-/* ─── Triggers / links (overview metadata) + IB editor ──── */
+/* ─── Triggers / links (overview metadata) ──────────────── */
 let ebReqHost = null;
 function ebReqRefresh() { if (ebReqHost) ebReqHost(); }
 
@@ -1992,24 +1924,6 @@ function ebTriggersModal(id) {
         <div class="field"><label class="field-label">Physical code (optional)</label><input type="text" maxlength="6" class="col-mono" value="${escapeHtml(c.code)}" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Other cards can require this code.</span></div>
       </div>
       ${ebVisibilityHtml(id)}
-    `,
-    footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
-  });
-}
-
-function ebIbModal(id) {
-  const c = ebCardById(id); if (!c) return;
-  ebReqHost = () => ebIbModal(id);
-  openModal({
-    title: 'IB round',
-    size: 'lg',
-    body: `
-      <div class="field-row">
-        <div class="field"><label class="field-label">Title</label><input type="text" value="${escapeHtml(ebT(c.title))}" onchange="ebSetCardField('${id}','title',this.value)"></div>
-        <div class="field"><label class="field-label">Type</label>${EB_TYPE_SELECT(id, c)}</div>
-      </div>
-      ${ebVisibilityHtml(id)}
-      ${ebIbFields(c)}
     `,
     footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
   });
@@ -2265,29 +2179,6 @@ function ebReqFromStart(id) {
 }
 
 function ebCloseCardModal() { closeModal(); if (ebb.designId) ebDesignerRender(); else renderEbBuilder(); }
-
-function ebIbFields(c) {
-  const ib = c.ib;
-  return `
-    <div class="panel" style="margin-top:14px;">
-      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▦</span> Investigation Board-runde</div>
-      <div class="panel-body">
-        <div class="field"><label class="field-label">Introtekst (vises i IB-kolonnen)</label><textarea rows="2" onchange="ebSetIbField('${c.id}','intro_text',this.value)">${escapeHtml(ib.intro_text || '')}</textarea></div>
-        <div class="field"><label class="field-label">Aktive koder (kommaseparert — kortene som er i spill)</label><input type="text" class="col-mono" value="${escapeHtml((ib.active_codes || []).join(', '))}" onchange="ebSetIbField('${c.id}','active_codes',this.value)"></div>
-        <div class="field-row">
-          <div class="field"><label class="field-label">Antall som skal plasseres</label><input type="number" min="0" value="${ib.place_count || 0}" onchange="ebSetIbField('${c.id}','place_count',this.value)"></div>
-          <div class="field"><label class="field-label">Riktige koder (kommaseparert)</label><input type="text" class="col-mono" value="${escapeHtml((ib.correct_codes || []).join(', '))}" onchange="ebSetIbField('${c.id}','correct_codes',this.value)"></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label class="field-label">Poeng ved riktig</label><input type="number" value="${ib.points_correct || 0}" onchange="ebSetIbField('${c.id}','points_correct',this.value)"></div>
-          <div class="field"><label class="field-label">Poeng ved feil (minus)</label><input type="number" value="${ib.points_wrong || 0}" onchange="ebSetIbField('${c.id}','points_wrong',this.value)"></div>
-        </div>
-        <div class="field"><label class="field-label">Beskjed om hvilke som legges til side (discard)</label><input type="text" value="${escapeHtml(ib.discard_hint || '')}" onchange="ebSetIbField('${c.id}','discard_hint',this.value)"></div>
-        <div class="field"><label class="field-label">Suksesstekst (vises når runden er løst)</label><textarea rows="2" onchange="ebSetIbField('${c.id}','success_text',this.value)">${escapeHtml(ib.success_text || '')}</textarea></div>
-      </div>
-    </div>`;
-}
-
 
 async function ebSaveAll() {
   try {
