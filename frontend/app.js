@@ -1635,18 +1635,20 @@ function ebTileHtml(card) {
     ? '<span class="badge amber">Investigation Board</span>'
     : '<span class="badge blue">Arbeidsområde</span>';
   const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">FYSISK · ${escapeHtml(card.code)}</span>` : '';
+  const fromStart = ((card.requires.conditions || []).length === 0)
+    ? '<span class="badge green">Fra start</span>' : '';
   const reqs = ebRequiresSummary(card);
   const trig = ebTriggersSummary(card);
   const count = isIb ? '' : `<span class="muted" style="font-size:11px;">${(card.blocks || []).length} blokk(er)</span>`;
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
-         style="background:var(--bg1,#0c1018);border:1px solid var(--bg3);border-left:3px solid ${isIb ? '#ffd166' : '#56ccf2'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
-      <div class="flex-gap" style="align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${badge} ${codeChip}</div>
-      <div style="font-weight:600;font-size:14px;margin-bottom:4px;">${escapeHtml(card.title || '(uten tittel)')}</div>
+         style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
+      <div class="flex-gap" style="align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${badge} ${fromStart} ${codeChip}</div>
+      <div style="font-weight:600;font-size:14px;margin-bottom:4px;color:var(--ink);">${escapeHtml(card.title || '(uten tittel)')}</div>
       ${count}
       <div class="muted" style="font-size:11px;margin-top:6px;line-height:1.5;">
-        <div><span style="color:#6fcf97;">▸ Vises når:</span> ${reqs}</div>
-        ${trig ? `<div><span style="color:#ffd166;">▸ Åpner:</span> ${trig}</div>` : ''}
+        <div><span style="color:var(--green);">▸ Vises når:</span> ${reqs}</div>
+        ${trig ? `<div><span style="color:var(--amber);">▸ Åpner:</span> ${trig}</div>` : ''}
       </div>
       <div class="flex-gap" style="margin-top:8px;">
         <button class="btn btn-sm" onclick="ebCardModal('${card.id}')">Rediger</button>
@@ -1789,16 +1791,40 @@ function ebSetIbField(id, field, value) {
   }
 }
 
-function ebCardModal(id) {
+function ebCardModal(id, gatedView) {
   const c = ebCardById(id); if (!c) return;
   const others = ebb.config.cards.filter(x => x.id !== id);
+  const conds = c.requires.conditions || [];
+  const gated = !!gatedView || conds.length > 0;
 
-  const condRows = (c.requires.conditions || []).map((cond, i) => {
+  const condRows = conds.map((cond, i) => {
     const label = cond.type === 'card_done'
       ? `«${escapeHtml((ebCardById(cond.card_id) || {}).title || 'slettet kort')}» utført`
       : `kode ${escapeHtml(cond.code)}`;
     return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:4px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
-  }).join('') || '<div class="muted" style="font-size:12px;">Ingen betingelser — vises fra start.</div>';
+  }).join('') || '<div class="muted" style="font-size:12px;">Ingen betingelser lagt til ennå.</div>';
+
+  const gatedBody = `
+    <div class="flex-gap" style="margin-bottom:10px;">
+      <span style="font-size:12px;color:var(--ink3);">Oppfyll</span>
+      <select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;">
+        <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>alle betingelser</option>
+        <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>minst én betingelse</option>
+      </select>
+    </div>
+    ${condRows}
+    <div class="field-row" style="margin-top:10px;align-items:flex-end;">
+      <div class="field"><label class="field-label">Krev at kort er utført</label>
+        <select id="eb-cond-card"><option value="">— velg kort —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(o.title || o.id)}</option>`).join('')}</select>
+      </div>
+      <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Legg til</button>
+    </div>
+    <div class="field-row" style="align-items:flex-end;">
+      <div class="field"><label class="field-label">Krev kode tastet</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
+      <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Legg til</button>
+    </div>`;
+
+  const fromStartBody = `<div class="muted" style="font-size:13px;">Kortet er aktivt fra start — det vises så snart spillet begynner.</div>`;
 
   const contentSection = c.surface === 'ib' ? ebIbFields(c) : ebBlocksSection(c);
 
@@ -1818,25 +1844,13 @@ function ebCardModal(id) {
       ${c.surface !== 'ib' ? `<div class="field"><label class="field-label">Fysisk kode (valgfritt)</label><input type="text" maxlength="6" value="${escapeHtml(c.code)}" class="col-mono" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Sett kode hvis kortet er et fysisk kort.</span></div>` : ''}
 
       <div class="panel" style="margin-top:14px;">
-        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Vises når
-          <span class="ph-spacer"></span>
-          <select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;">
-            <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>Alle betingelser</option>
-            <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>Minst én betingelse</option>
-          </select>
-        </div>
+        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Vises når</div>
         <div class="panel-body">
-          ${condRows}
-          <div class="field-row" style="margin-top:10px;align-items:flex-end;">
-            <div class="field"><label class="field-label">Krev at kort er utført</label>
-              <select id="eb-cond-card"><option value="">— velg kort —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(o.title || o.id)}</option>`).join('')}</select>
-            </div>
-            <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Legg til</button>
+          <div class="flex-gap" style="margin-bottom:12px;">
+            <button class="btn btn-sm ${gated ? 'btn-ghost' : ''}" onclick="ebReqFromStart('${id}')">Aktiv fra start</button>
+            <button class="btn btn-sm ${gated ? '' : 'btn-ghost'}" onclick="ebReqGated('${id}')">Krever betingelser</button>
           </div>
-          <div class="field-row" style="align-items:flex-end;">
-            <div class="field"><label class="field-label">Krev kode tastet</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
-            <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Legg til</button>
-          </div>
+          ${gated ? gatedBody : fromStartBody}
         </div>
       </div>
 
@@ -1845,6 +1859,15 @@ function ebCardModal(id) {
     footer: `<button class="btn" onclick="ebCloseCardModal()">Ferdig</button>`,
   });
 }
+
+// Sett kortet aktivt fra start (tøm betingelser)
+function ebReqFromStart(id) {
+  const c = ebCardById(id); if (!c) return;
+  c.requires.conditions = [];
+  ebCardModal(id);
+}
+// Vis betingelse-kontrollene (selv om ingen er lagt til ennå)
+function ebReqGated(id) { ebCardModal(id, true); }
 
 function ebCloseCardModal() { closeModal(); renderEbBuilder(); }
 
