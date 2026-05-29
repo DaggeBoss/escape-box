@@ -1640,7 +1640,7 @@ function ebPvEl(el) {
   const st = ebPvState;
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
   if (el.type === 'image') {
-    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
+    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
   }
   if (el.type === 'link') {
     return `<div style="${pos}padding:4px 6px;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
@@ -1655,12 +1655,15 @@ function ebPvEl(el) {
   }
   if (el.type === 'question') {
     const answered = st.answeredCorrect.has(el.id);
-    const opts = (el.options || []).map((o, i) => answered
-      ? `<div style="padding:6px 8px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:6px;margin-bottom:4px;font-size:13px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(ebT(o.text))}</div>`
-      : `<button onclick="ebPvAnswer('${el.id}',${i})" style="display:block;width:100%;text-align:left;padding:6px 8px;border:1px solid var(--rule2);border-radius:6px;margin-bottom:4px;background:var(--paper);color:var(--ink);cursor:pointer;font-size:13px;font-family:var(--font-serif);">${escapeHtml(ebT(o.text))}</button>`
-    ).join('');
-    return `<div style="${pos}padding:6px 8px;overflow:auto;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:6px;color:var(--ink);">${escapeHtml(ebT(el.prompt) || 'Question')}${el.points ? ` <span class="muted" style="font-weight:400;font-size:11px;">(${el.points} p)</span>` : ''}</div>
+    const opts = (el.options || [])
+      .map((o, i) => ({ o, i }))
+      .filter(({ o }) => ebT(o.text).trim() !== '')
+      .map(({ o, i }) => answered
+        ? `<div style="padding:8px 11px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:7px;margin-bottom:5px;font-size:14px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(ebT(o.text))}</div>`
+        : `<button onclick="ebPvAnswer('${el.id}',${i})" style="display:block;width:100%;text-align:left;padding:8px 11px;border:1px solid var(--rule2);border-radius:7px;margin-bottom:5px;background:var(--paper);color:var(--ink);cursor:pointer;font-size:14px;font-family:var(--font-serif);">${escapeHtml(ebT(o.text))}</button>`)
+      .join('');
+    return `<div style="${pos}padding:8px 10px;overflow:auto;">
+      <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:var(--ink);">${escapeHtml(ebT(el.prompt) || 'Question')}${el.points ? ` <span class="muted" style="font-weight:400;font-size:12px;">(${el.points} p)</span>` : ''}</div>
       ${opts}
     </div>`;
   }
@@ -1802,7 +1805,7 @@ function ebMiniCanvasHtml(card, width) {
 function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
   if (el.type === 'image') return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
-  if (el.type === 'question') return `<div style="${pos}padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
+  if (el.type === 'question') return `<div style="${pos}padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
   if (el.type === 'password') return `<div style="${pos}padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
   if (el.type === 'link') return `<div style="${pos}padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
   if (el.type === 'unlock') return `<div style="${pos}padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
@@ -2209,7 +2212,7 @@ function ebPickElImage(elId) {
     if (!file) return;
     showToast('Uploading image…', 'info');
     try {
-      const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards' });
+      const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards', thumbWidth: 720 });
       const el = ebElGet(elId);
       if (el && res && res.url) { el.url = res.url; el.thumb = res.thumb_url || res.url; showToast('Image uploaded', 'success'); }
       ebDesignerRender();
