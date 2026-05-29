@@ -2139,7 +2139,7 @@ function ebElBox(el) {
       <div style="width:100%;height:100%;box-sizing:border-box;outline:1px dashed var(--rule2);background:rgba(255,255,255,0.55);overflow:hidden;display:flex;flex-direction:column;">
         ${headerStrip}
         <div onmousedown="ebFmtFocus('${id}','body-bg')" style="flex:1;min-height:0;overflow:auto;position:relative;${el.bg ? `background:${el.bg};` : ''}">${ebElEdit(el)}</div>
-        <div data-fmtbar="${id}" style="flex:0 0 auto;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);overflow-x:auto;">
+        <div data-fmtbar="${id}" style="flex:0 0 auto;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);">
           ${ebFmtToolbar(el)}
         </div>
       </div>
@@ -2279,22 +2279,24 @@ function ebFmtToolbar(el) {
   const sizeBold = `
       <button onmousedown="event.preventDefault()" onclick="ebElSizeF('${id}','${sizeField}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
       <button onmousedown="event.preventDefault()" onclick="ebElSizeF('${id}','${sizeField}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
-      <button onmousedown="event.preventDefault()" onclick="ebElToggle('${id}','${boldField}')" class="btn btn-sm ${isBold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
-      ${sep}`;
+      <button onmousedown="event.preventDefault()" onclick="ebElToggle('${id}','${boldField}')" class="btn btn-sm ${isBold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>`;
 
   const label = isText ? `${region === 'header' ? 'Header' : 'Tekst'} · farge`
                        : `${region === 'header' ? 'Header' : 'Bolk'} · bakgrunn`;
   const tag = `<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--blue);font-weight:700;margin-right:2px;flex:0 0 auto;white-space:nowrap;">${label}</span>`;
   const clearBg = !isText ? `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','')" title="Ingen bakgrunn" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>` : '';
 
-  return `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:nowrap;white-space:nowrap;width:max-content;">
-      ${tag}
-      ${sizeBold}
-      ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
-      ${sep}
-      ${pal}
-      <input type="color" value="${cur || (isText ? '#1a1610' : '#b83228')}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${field}',this.value)" title="Egendefinert" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
-      ${clearBg}
+  return `<div style="display:flex;flex-direction:column;gap:3px;max-width:100%;">
+      <div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;">
+        ${tag}
+        ${sizeBold}
+        ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
+      </div>
+      <div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;">
+        ${pal}
+        <input type="color" value="${cur || (isText ? '#1a1610' : '#b83228')}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${field}',this.value)" title="Egendefinert" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
+        ${clearBg}
+      </div>
     </div>`;
 }
 
