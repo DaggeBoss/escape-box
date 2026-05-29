@@ -2138,7 +2138,10 @@ function ebElBox(el) {
       ${grip}${hBtn}${del}${resize}
       <div style="width:100%;height:100%;box-sizing:border-box;outline:1px dashed var(--rule2);background:rgba(255,255,255,0.55);overflow:hidden;display:flex;flex-direction:column;">
         ${headerStrip}
-        <div style="flex:1;min-height:0;overflow:auto;position:relative;">${ebElEdit(el)}</div>
+        <div onmousedown="ebFmtFocus('${id}','body-bg')" style="flex:1;min-height:0;overflow:auto;position:relative;${el.bg ? `background:${el.bg};` : ''}">${ebElEdit(el)}</div>
+        <div data-fmtbar="${id}" style="flex:0 0 auto;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);overflow-x:auto;">
+          ${ebFmtToolbar(el)}
+        </div>
       </div>
     </div>`;
 }
@@ -2209,11 +2212,8 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${el.bg ? `background:${el.bg};` : callout}">
+  return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${el.bg ? '' : callout}">
     ${ce2('text', escapeHtml(ebT(el.text)), el, `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
-    <div data-fmtbar="${id}" style="position:absolute;left:0;bottom:0;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;max-width:100%;">
-      ${ebFmtToolbar(el)}
-    </div>
   </div>`;
 }
 
@@ -2287,7 +2287,7 @@ function ebFmtToolbar(el) {
   const tag = `<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--blue);font-weight:700;margin-right:2px;flex:0 0 auto;white-space:nowrap;">${label}</span>`;
   const clearBg = !isText ? `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','')" title="Ingen bakgrunn" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>` : '';
 
-  return `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;max-width:100%;">
+  return `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:nowrap;white-space:nowrap;width:max-content;">
       ${tag}
       ${sizeBold}
       ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
