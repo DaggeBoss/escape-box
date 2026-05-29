@@ -1942,15 +1942,6 @@ function ebTriggersModal(id) {
   });
 }
 
-function ebSetCanvasHeight(id, value) {
-  const c = ebCardById(id); if (!c) return;
-  c.canvas.h = Math.max(160, Math.min(1400, parseInt(value, 10) || c.canvas.h));
-}
-function ebSetCanvasHeightLive(id, value) {
-  ebSetCanvasHeight(id, value);
-  ebDesignerRender();
-}
-
 /* ─── Canvas designer (full page, work cards) ───────────── */
 let ebDrag = null;
 
@@ -1990,17 +1981,14 @@ function ebDesignerRender() {
       <div class="panel-body"><div class="flex-gap" style="flex-wrap:wrap;">${tools}</div></div>
     </div>
     <div class="panel">
-      <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}px wide (${c.surface === 'ib' ? 'IB' : 'work'}) — same format as participant view</span>
-        <span class="ph-spacer"></span>
-        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink3);">Height
-          <input type="number" min="160" max="1400" step="20" value="${c.canvas.h}" onchange="ebSetCanvasHeightLive('${c.id}',this.value)" style="width:78px;text-align:right;">px
-        </span>
-      </div>
+      <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}×${c.canvas.h} (${c.surface === 'ib' ? 'IB' : 'work'}) — drag the bottom edge to change height</span></div>
       <div class="panel-body" style="overflow:auto;">
         <div style="display:inline-block;">
           <div id="eb-canvas" style="position:relative;width:${c.canvas.w}px;height:${c.canvas.h}px;background:var(--paper);border:1px solid var(--rule2);box-shadow:0 2px 8px var(--shadow);">
             ${(c.elements || []).map(el => ebElBox(el)).join('')}
           </div>
+          <div onpointerdown="ebCanvasResizeDown(event,'${c.id}')" title="Drag to change height"
+               style="width:${c.canvas.w}px;height:16px;margin-top:3px;border-radius:5px;background:var(--bg3);border:1px solid var(--rule2);cursor:ns-resize;display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:11px;letter-spacing:0.15em;user-select:none;">⋯</div>
         </div>
       </div>
     </div>
@@ -2132,8 +2120,24 @@ function ebElResizeDown(ev, id) {
   document.addEventListener('pointermove', ebDragMove);
   document.addEventListener('pointerup', ebDragUp);
 }
+function ebCanvasResizeDown(ev, id) {
+  ev.stopPropagation(); ev.preventDefault();
+  const c = ebCardById(id); if (!c) return;
+  ebDrag = { id, mode: 'canvas', sy: ev.clientY, oh: c.canvas.h };
+  document.addEventListener('pointermove', ebDragMove);
+  document.addEventListener('pointerup', ebDragUp);
+}
 function ebDragMove(ev) {
   if (!ebDrag) return;
+  if (ebDrag.mode === 'canvas') {
+    const c = ebCardById(ebb.designId);
+    const node = document.getElementById('eb-canvas');
+    if (!c || !node) return;
+    const dy = ev.clientY - ebDrag.sy;
+    c.canvas.h = Math.max(160, Math.min(1400, Math.round(ebDrag.oh + dy)));
+    node.style.height = c.canvas.h + 'px';
+    return;
+  }
   const el = ebCardById(ebb.designId).elements.find(e => e.id === ebDrag.id);
   const node = document.querySelector(`[data-elid="${ebDrag.id}"]`);
   if (!el || !node) return;
