@@ -1176,6 +1176,19 @@ function ebUid(p) { return `${p}_${Date.now().toString(36)}${Math.random().toStr
 function ebT(v) { return v == null ? '' : (typeof v === 'string' ? v : (v[EB_LANG] || v.en || '')); }
 function ebToLang(v) { return (v && typeof v === 'object') ? v : { [EB_LANG]: (v || '') }; }
 
+// Oppgrader gamle www.dropbox.com/?raw=1-URLer til det raske dl-domenet ved
+// visning (lagrede data endres ikke — nye opplastinger lagrer riktig URL).
+function ebImgUrl(u) {
+  if (!u) return u;
+  return u
+    .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+    .replace(/([?&])raw=1/g, '$1')
+    .replace(/([?&])dl=[01]/g, '$1')
+    .replace(/[?&]+$/g, '')
+    .replace(/\?&/, '?')
+    .replace(/&&+/g, '&');
+}
+
 function ebNormalizeConfig(cfg) {
   cfg = cfg && typeof cfg === 'object' ? cfg : {};
   const cards = Array.isArray(cfg.cards) ? cfg.cards.map((c, i) => ebNormalizeCard(c, i)) : [];
@@ -1494,7 +1507,7 @@ function ebPvIntro() {
       <div style="max-width:620px;text-align:center;">
         <div class="page-eyebrow">${escapeHtml(ebb.concept.name)}</div>
         <h1 style="font-family:var(--font-serif);font-size:30px;margin:12px 0;color:var(--ink);">${escapeHtml(cfg.intro.title || 'Welcome')}</h1>
-        ${cfg.intro.media_url ? `<img src="${escapeHtml(cfg.intro.media_url)}" style="max-width:100%;max-height:220px;border-radius:8px;margin:14px 0;border:1px solid var(--rule);">` : ''}
+        ${cfg.intro.media_url ? `<img src="${escapeHtml(ebImgUrl(cfg.intro.media_url))}" style="max-width:100%;max-height:220px;border-radius:8px;margin:14px 0;border:1px solid var(--rule);">` : ''}
         <p style="color:var(--ink2);line-height:1.7;white-space:pre-wrap;">${escapeHtml(cfg.intro.body || '')}</p>
         <button class="btn" style="margin-top:22px;" onclick="ebPvStart()">▶ Start mission</button>
       </div>
@@ -1596,7 +1609,7 @@ function ebPvHeaderBar(el) {
 function ebPvElInner(el) {
   const st = ebPvState;
   if (el.type === 'image') {
-    return el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
+    return el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
   }
   if (el.type === 'link') {
     return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
@@ -1761,7 +1774,7 @@ function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
   const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:600;font-size:13px;${el.headerBg ? `background:${el.headerBg};color:#fff;` : 'color:var(--ink);border-bottom:1px solid var(--rule);'}">${escapeHtml(ebT(el.header))}</div>` : '';
   let inner;
-  if (el.type === 'image') inner = el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
+  if (el.type === 'image') inner = el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
   else if (el.type === 'question') inner = `<div style="padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
   else if (el.type === 'password') inner = `<div style="padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
   else if (el.type === 'link') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
@@ -2013,7 +2026,7 @@ function ebElEdit(el) {
   const ce = (field, html, style) => `<div contenteditable="true" onblur="ebElText('${id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
   if (el.type === 'image') {
     return `<div style="position:relative;width:100%;height:100%;">
-      ${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
+      ${el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
       <button onclick="ebPickElImage('${id}')" class="btn btn-sm" style="position:absolute;bottom:4px;left:4px;">Upload</button>
     </div>`;
   }
@@ -2161,7 +2174,7 @@ function ebPickElImage(elId) {
     if (!file) return;
     showToast('Uploading image…', 'info');
     try {
-      const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards', thumbWidth: 720 });
+      const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards', thumbWidth: 360, thumbQuality: 0.6 });
       const el = ebElGet(elId);
       if (el && res && res.url) { el.url = res.url; el.thumb = res.thumb_url || res.url; showToast('Image uploaded', 'success'); }
       ebDesignerRender();

@@ -193,15 +193,38 @@ async function getOrCreateSharedLink(dropboxPath) {
     throw new Error('Kunne ikke lage shared link: ' + JSON.stringify(create));
   }
 
-  // Konverter til direkte bilde-URL.
-  return url.replace(/[?&]dl=0/, '').replace(/(\?|&)/, m => m) + (url.includes('?') ? '&raw=1' : '?raw=1');
+  // Konverter til direkte bilde-URL på Dropbox' fil-CDN.
+  // www.dropbox.com/...?dl=0  →  dl.dropboxusercontent.com/...  (beholder rlkey)
+  // dl.dropboxusercontent.com er raskere enn www-redirecten med ?raw=1.
+  return toDirectUrl(url);
+}
+
+// Gjør en hvilken som helst Dropbox-delingslenke om til en rask direkte-URL.
+function toDirectUrl(url) {
+  if (!url) return url;
+  let out = url
+    .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+    .replace('//dropbox.com', '//dl.dropboxusercontent.com');
+  // Fjern dl=0 / dl=1 / raw=1 — ikke nødvendig på dl-domenet, men behold rlkey o.l.
+  out = out
+    .replace(/([?&])dl=[01]/g, '$1')
+    .replace(/([?&])raw=1/g, '$1')
+    .replace(/[?&]+$/g, '')
+    .replace(/\?&/, '?')
+    .replace(/&&+/g, '&');
+  return out;
 }
 
 // Trekk tilbake en shared link (men ikke slett selve filen)
 async function revokeSharedLink(sharedUrl) {
   const token = await getAccessToken();
-  // Dropbox vil ha originalen, ikke ?raw=1-versjonen — strip det
-  const cleanUrl = sharedUrl.replace(/[?&]raw=1/, '').replace(/&$/, '');
+  // Dropbox' revoke-API vil ha www-formen uten våre query-tillegg.
+  // Håndter både gammelt (www…?raw=1) og nytt (dl.dropboxusercontent.com) format.
+  const cleanUrl = sharedUrl
+    .replace('dl.dropboxusercontent.com', 'www.dropbox.com')
+    .replace(/([?&])raw=1/g, '$1')
+    .replace(/([?&])dl=[01]/g, '$1')
+    .replace(/[?&]+$/g, '');
   const result = await dropboxApi('sharing/revoke_shared_link', { url: cleanUrl }, token);
   return result;
 }
