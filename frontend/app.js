@@ -1331,6 +1331,20 @@ function renderEbBuilder() {
     </div>
     ${ebCardsTab()}
   `;
+  requestAnimationFrame(ebScaleMiniCanvases);
+}
+
+// Skaler responsive mini-canvas til containerbredden (transform-scale).
+function ebScaleMiniCanvases() {
+  const root = ebRoot();
+  if (!root) return;
+  root.querySelectorAll('[data-mini-cw]').forEach(node => {
+    const cw = parseFloat(node.dataset.miniCw);
+    const wrap = node.parentElement;
+    if (!cw || !wrap) return;
+    const W = wrap.clientWidth;
+    if (W) node.style.transform = `scale(${W / cw})`;
+  });
 }
 
 function ebSetTab(t) { ebb.tab = t; renderEbBuilder(); }
@@ -1794,16 +1808,31 @@ function ebCardsTab() {
   const workCards = c.cards.filter(x => x.surface !== 'ib').sort((a, b) => a.track - b.track || a.order - b.order);
   const ibCards = c.cards.filter(x => x.surface === 'ib').sort((a, b) => a.track - b.track || a.order - b.order);
 
-  const colHtml = (title, accent, cards, surface) => `
-    <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnCol(event,'${surface}')"
+  // Venstre: IB-kolonne (fast, smal som i spillflyt). Høyre: arbeidskort i 3 kolonner.
+  const ibCol = `
+    <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnCol(event,'ib')"
+         style="flex:0 0 200px;align-self:flex-start;background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:12px;">
+      <div class="flex-gap" style="align-items:center;margin-bottom:10px;">
+        <span style="width:10px;height:10px;border-radius:3px;background:var(--amber);"></span>
+        <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;font-size:13px;color:var(--ink2);flex:1;">IB</span>
+        <span class="muted" style="font-size:11px;">${ibCards.length}</span>
+      </div>
+      ${ibCards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;">Ingen kort.</div>'}
+      <button class="btn btn-sm btn-secondary" style="margin-top:6px;width:100%;" onclick="ebAddCard(0,'ib')">+ IB-kort</button>
+    </div>`;
+
+  const workCol = `
+    <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnCol(event,'work')"
          style="flex:1 1 0;min-width:0;background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:12px;">
       <div class="flex-gap" style="align-items:center;margin-bottom:10px;">
-        <span style="width:10px;height:10px;border-radius:3px;background:${accent};"></span>
-        <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;font-size:13px;color:var(--ink2);flex:1;">${title}</span>
-        <span class="muted" style="font-size:11px;">${cards.length}</span>
+        <span style="width:10px;height:10px;border-radius:3px;background:var(--blue);"></span>
+        <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;font-size:13px;color:var(--ink2);flex:1;">Arbeidsområde</span>
+        <span class="muted" style="font-size:11px;">${workCards.length}</span>
       </div>
-      ${cards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;">Ingen kort.</div>'}
-      <button class="btn btn-sm btn-secondary" style="margin-top:6px;width:100%;" onclick="ebAddCard(0,'${surface}')">+ ${surface === 'ib' ? 'IB-kort' : 'Arbeidskort'}</button>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:start;">
+        ${workCards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;grid-column:1/-1;">Ingen kort.</div>'}
+      </div>
+      <button class="btn btn-sm btn-secondary" style="margin-top:10px;" onclick="ebAddCard(0,'work')">+ Arbeidskort</button>
     </div>`;
 
   const triggerBar = sel ? (() => {
@@ -1835,8 +1864,8 @@ function ebCardsTab() {
         ${triggerBar}
         ${c.cards.length === 0 ? '<div class="muted" style="margin-bottom:10px;">Ingen kort ennå. Legg til et kort nedenfor.</div>' : ''}
         <div style="display:flex;gap:14px;align-items:flex-start;">
-          ${colHtml('Arbeidsområde', 'var(--blue)', workCards, 'work')}
-          ${colHtml('Investigation Board', 'var(--amber)', ibCards, 'ib')}
+          ${ibCol}
+          ${workCol}
         </div>
       </div>
     </div>
@@ -1846,40 +1875,42 @@ function ebCardsTab() {
 function ebTileHtml(card) {
   const isIb = card.surface === 'ib';
   const sel = ebb.triggerSelect;
-  const thumb = ebMiniCanvasHtml(card, isIb ? 150 : 256);
+  const thumb = ebMiniCanvasResponsive(card);
   const reqCount = (card.requires.conditions || []).filter(x => x.type === 'card_done').length;
-  const fromStart = reqCount === 0 ? '<span class="badge green">Fra start</span>' : `<span class="badge amber">${reqCount} trigger${reqCount > 1 ? 'e' : ''}</span>`;
+  const title = escapeHtml(ebT(card.title) || '(uten tittel)');
 
-  // ── Velg-modus: dette kortet kan markeres som trigger for sel.forId ──
+  // ── Velg-modus: hele kortet får grønn ramme når markert ──
   if (sel) {
     if (card.id === sel.forId) {
-      // Selve kortet vi setter triggere for — vis, men ikke markerbart
-      return `<div style="background:var(--paper);border:2px solid var(--amber);border-radius:10px;padding:10px;margin-bottom:8px;opacity:0.95;">
+      return `<div style="background:var(--paper);border:2px solid var(--amber);border-radius:10px;padding:6px;margin-bottom:8px;">
         ${thumb}
-        <div style="font-weight:600;font-size:14px;margin:8px 0 4px;color:var(--amber);">▸ Setter triggere for dette kortet</div>
+        <div style="font-weight:600;font-size:12px;margin-top:5px;color:var(--amber);text-align:center;">▸ setter triggere</div>
       </div>`;
     }
     const picked = sel.picked.has(card.id);
-    return `<div onclick="ebTriggerToggle('${card.id}')" style="cursor:pointer;background:var(--paper);border:2px solid ${picked ? 'var(--green)' : 'var(--rule)'};border-radius:10px;padding:10px;margin-bottom:8px;position:relative;">
-      <div style="position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:6px;border:2px solid ${picked ? 'var(--green)' : 'var(--rule2)'};background:${picked ? 'var(--green)' : 'var(--paper)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;z-index:2;">${picked ? '✓' : ''}</div>
+    return `<div onclick="ebTriggerToggle('${card.id}')" title="${title}"
+         style="cursor:pointer;background:var(--paper);border:3px solid ${picked ? 'var(--green)' : 'var(--rule)'};border-radius:10px;padding:6px;margin-bottom:8px;">
       ${thumb}
-      <div style="font-weight:600;font-size:14px;margin:8px 0 0;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
+      <div style="font-weight:600;font-size:12px;margin-top:5px;color:${picked ? 'var(--green)' : 'var(--ink2)'};text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${picked ? '✓ ' : ''}${title}</div>
     </div>`;
   }
 
-  // ── Normal modus ──
+  // ── Normal modus: slankt kort + lite bunnfelt ──
+  const trigBadge = reqCount === 0
+    ? '<span style="font-size:10px;color:var(--green);">● fra start</span>'
+    : `<span style="font-size:10px;color:var(--amber);" title="${escapeHtml(ebRequiresSummary(card))}">▸ ${reqCount} trigger${reqCount > 1 ? 'e' : ''}</span>`;
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
-         style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px;margin-bottom:8px;">
-      <div onclick="ebOpenDesigner('${card.id}')" style="cursor:pointer;" title="Rediger kort">
+         style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;overflow:hidden;margin-bottom:8px;">
+      <div onclick="ebOpenDesigner('${card.id}')" style="cursor:pointer;padding:6px 6px 0;" title="Rediger ${title}">
         ${thumb}
-        <div style="font-weight:600;font-size:14px;margin:8px 0 4px;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
+        <div style="font-weight:600;font-size:12px;margin:5px 2px 6px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${title}</div>
       </div>
-      <div class="flex-gap" style="flex-wrap:wrap;gap:5px;margin-bottom:8px;">${fromStart}</div>
-      ${reqCount ? `<div class="muted" style="font-size:11px;line-height:1.5;margin-bottom:8px;"><span style="color:var(--green);">▸ vises når disse er fullført:</span> ${ebRequiresSummary(card)}</div>` : ''}
-      <div class="flex-gap">
-        <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggerStart('${card.id}')">Velg triggere</button>
-        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();ebDeleteCard('${card.id}')">Slett</button>
+      <div style="display:flex;align-items:center;gap:4px;padding:5px 6px;border-top:1px solid var(--rule);background:var(--bg2);">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${trigBadge}</span>
+        <button class="btn btn-sm btn-ghost" style="padding:0 6px;font-size:11px;" onclick="event.stopPropagation();ebTriggerStart('${card.id}')" title="Velg triggere">▸</button>
+        <button class="btn btn-sm btn-ghost" style="padding:0 6px;font-size:11px;" onclick="event.stopPropagation();ebOpenDesigner('${card.id}')" title="Rediger">✎</button>
+        <button class="btn btn-sm btn-ghost" style="padding:0 6px;font-size:11px;color:var(--red);" onclick="event.stopPropagation();ebDeleteCard('${card.id}')" title="Slett">✕</button>
       </div>
     </div>`;
 }
@@ -1933,6 +1964,19 @@ function ebMiniCanvasHtml(card, width) {
   return `<div style="position:relative;width:${width}px;height:${Math.round(ch * s)}px;overflow:hidden;background:var(--paper);border:1px solid var(--rule);border-radius:6px;">
     <div style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform:scale(${s});transform-origin:top left;">
       ${(card.elements || []).map(ebMiniEl).join('')}
+    </div>
+  </div>`;
+}
+// Fyller bredden av sin container (for grid-celler). Bevarer kortets aspekt.
+function ebMiniCanvasResponsive(card) {
+  const cw = (card.canvas && card.canvas.w) || 700;
+  const ch = (card.canvas && card.canvas.h) || 460;
+  const pct = (ch / cw) * 100;
+  return `<div style="position:relative;width:100%;padding-bottom:${pct.toFixed(2)}%;overflow:hidden;background:var(--paper);border:1px solid var(--rule);border-radius:6px;">
+    <div style="position:absolute;inset:0;">
+      <div style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform-origin:top left;" data-mini-cw="${cw}">
+        ${(card.elements || []).map(ebMiniEl).join('')}
+      </div>
     </div>
   </div>`;
 }
