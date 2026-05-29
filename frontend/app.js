@@ -1362,6 +1362,7 @@ function ebOpenPreview() {
     mgSolved: new Set(),         // minigame element ids solved
     openCards: new Set(),        // UI open/closed state
     seen: new Set(),             // cards auto-opened once on reveal
+    revealSeq: [],               // card ids in the order they became visible
   };
   let ov = document.getElementById('eb-pv-overlay');
   if (!ov) { ov = document.createElement('div'); ov.id = 'eb-pv-overlay'; document.body.appendChild(ov); }
@@ -1563,8 +1564,13 @@ function ebPvRender() {
     inner = ebPvIntro();
   } else {
     const { visible, done } = ebPvCompute();
-    // auto-open newly revealed cards (cards stay open when completed — close manually)
-    cfg.cards.forEach(c => { if (visible.has(c.id) && !st.seen.has(c.id)) { st.seen.add(c.id); st.openCards.add(c.id); } });
+    // Registrer nylig avdekkede kort i avdekkingsrekkefølge. Kort som blir
+    // synlige i samme runde sorteres etter byggerens order (track, order) —
+    // det er slik du styrer innbyrdes rekkefølge på «samtidige» kort.
+    const newly = cfg.cards
+      .filter(c => visible.has(c.id) && !st.seen.has(c.id))
+      .sort((a, b) => a.track - b.track || a.order - b.order);
+    newly.forEach(c => { st.seen.add(c.id); st.openCards.add(c.id); st.revealSeq.push(c.id); });
     inner = `
       <div style="flex:1;display:flex;min-height:0;">
         <div style="flex:0 0 320px;border-right:1px solid var(--rule);overflow:auto;padding:18px;background:var(--bg2);">
@@ -1621,11 +1627,23 @@ function ebPvIntro() {
     </div>`;
 }
 
-function ebPvIbColumn(visible, done) {
+function ebPvVisibleByReveal(visible, surfaceIsIb) {
   const st = ebPvState;
-  const cards = st.cfg.cards
-    .filter(c => c.surface === 'ib' && visible.has(c.id))
-    .sort((a, b) => a.track - b.track || a.order - b.order);
+  const seq = st.revealSeq;
+  return st.cfg.cards
+    .filter(c => (c.surface === 'ib') === surfaceIsIb && visible.has(c.id))
+    .sort((a, b) => {
+      const ia = seq.indexOf(a.id), ib = seq.indexOf(b.id);
+      // Avdekkede kort i avdekkingsrekkefølge; ev. ikke-sporede sist (builder-order)
+      if (ia === -1 && ib === -1) return a.track - b.track || a.order - b.order;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+}
+
+function ebPvIbColumn(visible, done) {
+  const cards = ebPvVisibleByReveal(visible, true);
 
   const head = `<div class="page-eyebrow" style="margin-bottom:12px;">Investigation Board</div>`;
   if (cards.length === 0) {
@@ -1636,9 +1654,7 @@ function ebPvIbColumn(visible, done) {
 
 function ebPvWorkArea(visible, done) {
   const st = ebPvState;
-  const cards = st.cfg.cards
-    .filter(c => c.surface !== 'ib' && visible.has(c.id))
-    .sort((a, b) => a.track - b.track || a.order - b.order);
+  const cards = ebPvVisibleByReveal(visible, false);
 
   if (cards.length === 0) {
     return `<div class="muted" style="padding:30px;text-align:center;">No active cards yet.</div>`;
@@ -1813,7 +1829,7 @@ function ebCardsTab() {
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">▦</span> Kort &amp; flyt
         <span class="ph-spacer"></span>
-        <span class="muted" style="font-size:11px;">${sel ? 'Velg-modus aktiv' : 'Trykk «Velg triggere» på et kort for å koble fullføring'}</span>
+        <span class="muted" style="font-size:11px;">${sel ? 'Velg-modus aktiv' : 'Nye kort legger seg nederst hos deltageren. Dra for å styre rekkefølgen på kort som trigges samtidig.'}</span>
       </div>
       <div class="panel-body">
         ${triggerBar}
