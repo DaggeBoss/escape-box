@@ -1274,13 +1274,12 @@ function ebNormalizeElement(e) {
     align: e.align || 'left',
     bold: !!e.bold,
     color: e.color || '',
+    bg: e.bg || '',
     headerOn: e.headerOn !== undefined ? !!e.headerOn : !!ebT(e.header),
     header: ebToLang(e.header),
     headerBg: e.headerBg || '',
     headerColor: e.headerColor || '',
     headerAlign: e.headerAlign || 'left',
-    headerAlign: e.headerAlign || 'left',
-    headerColor: e.headerColor || '',
     // minigame (egen HTML-boks, åpnes i fullskjerm-overlay)
     mg_url: e.mg_url || '',
     mg_path: e.mg_path || '',
@@ -1797,7 +1796,8 @@ function ebPvElInner(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);border-radius:4px;' : '';
-  return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};line-height:1.4;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
+  const bgStyle = el.bg ? `background:${el.bg};` : callout;
+  return `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${bgStyle}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};line-height:1.4;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
 }
 
 
@@ -1967,11 +1967,16 @@ function ebMiniCanvasHtml(card, width) {
     </div>
   </div>`;
 }
-// Fyller bredden av sin container (for grid-celler). Bevarer kortets aspekt.
+// Fyller bredden av sin container (for grid-celler). Fast STANDARD-aspekt
+// uavhengig av kortets faktiske høyde: viser toppen av kortet, kutter det
+// som er nedenfor, og fyller med hvitt hvis kortet er lavere enn standard.
 function ebMiniCanvasResponsive(card) {
-  const cw = (card.canvas && card.canvas.w) || 700;
-  const ch = (card.canvas && card.canvas.h) || 460;
-  const pct = (ch / cw) * 100;
+  const surface = card.surface === 'ib' ? 'ib' : 'work';
+  const base = EB_CANVAS[surface];
+  const cw = base.w;               // standard bredde for flaten
+  const stdH = base.h;             // standard høyde (fast thumbnail-aspekt)
+  const ch = (card.canvas && card.canvas.h) || stdH; // faktisk korthøyde
+  const pct = (stdH / cw) * 100;   // thumbnail-aspekt = standard
   return `<div style="position:relative;width:100%;padding-bottom:${pct.toFixed(2)}%;overflow:hidden;background:var(--paper);border:1px solid var(--rule);border-radius:6px;">
     <div style="position:absolute;inset:0;">
       <div style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform-origin:top left;" data-mini-cw="${cw}">
@@ -1990,7 +1995,7 @@ function ebMiniEl(el) {
   else if (el.type === 'link') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
   else if (el.type === 'unlock') inner = `<div style="padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
   else if (el.type === 'minigame') inner = `<div style="padding:6px 8px;font-size:13px;color:var(--blue);">🎮 ${escapeHtml(ebT(el.mg_label) || 'Minigame')}${el.mg_url ? '' : ' (no file)'}</div>`;
-  else { const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : ''; inner = `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`; }
+  else { const callout = el.bg ? `background:${el.bg};` : (el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : ''); inner = `<div style="padding:6px 8px;height:100%;box-sizing:border-box;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`; }
   return `<div style="${pos}display:flex;flex-direction:column;">${header}<div style="flex:1;min-height:0;overflow:hidden;">${inner}</div></div>`;
 }
 
@@ -2115,31 +2120,6 @@ function ebDesignerRender() {
   `;
 }
 
-/* Header toolbar (align, text color, background) — shown for any element with header on */
-function ebHeaderToolbar(el) {
-  const id = el.id;
-  const PALETTE = [
-    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
-    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
-  ];
-  const alignIcon = (lines) => `<svg width="14" height="12" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
-  const L = { left: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>', center: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>', right: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>' };
-  const alignBtn = (a) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerAlign','${a}')" title="Align ${a}" class="btn btn-sm ${el.headerAlign === a ? '' : 'btn-ghost'}" style="padding:0 5px;display:inline-flex;align-items:center;color:${el.headerAlign === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
-  const swatch = (field, val, css, cur) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:15px;height:15px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
-  const pal = (field, cur) => PALETTE.map(([v, css]) => swatch(field, v, css, cur)).join('');
-  const sep = '<span style="width:1px;height:16px;background:var(--rule2);margin:0 2px;flex:0 0 auto;"></span>';
-  return `<div class="flex-gap" style="flex:0 0 auto;align-items:center;gap:3px;flex-wrap:wrap;padding:3px 6px;background:var(--bg2);border-bottom:1px solid var(--rule);">
-      <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink3);font-weight:700;margin-right:1px;flex:0 0 auto;">Hdr</span>
-      ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
-      ${sep}
-      <span title="Text color" style="font-size:10px;color:var(--ink3);flex:0 0 auto;">A</span>${pal('headerColor', el.headerColor)}
-      ${sep}
-      <span title="Background" style="font-size:11px;color:var(--ink3);flex:0 0 auto;">▦</span>${pal('headerBg', el.headerBg)}
-      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" onpointerdown="event.stopPropagation()" title="Custom background" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
-      <button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','')" title="No background" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
-    </div>`;
-}
-
 /* Element on the designer canvas — inline editable (type directly) */
 function ebElBox(el) {
   const id = el.id;
@@ -2149,9 +2129,8 @@ function ebElBox(el) {
   const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
   const headerStrip = el.headerOn ? `
     <div style="flex:0 0 auto;padding:4px 8px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
-      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="outline:none;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};color:${el.headerColor || (el.headerBg ? '#fff' : 'var(--ink)')};">${escapeHtml(ebT(el.header))}</div>
-    </div>
-    ${ebHeaderToolbar(el)}` : '';
+      <div contenteditable="true" onfocus="ebFmtFocus('${id}','header')" onblur="ebElText('${id}','header',this)" style="outline:none;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};color:${el.headerColor || (el.headerBg ? '#fff' : 'var(--ink)')};">${escapeHtml(ebT(el.header))}</div>
+    </div>` : '';
   return `
     <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
       ${grip}${hBtn}${del}${resize}
@@ -2165,6 +2144,7 @@ function ebElBox(el) {
 function ebElEdit(el) {
   const id = el.id;
   const ce = (field, html, style) => `<div contenteditable="true" onblur="ebElText('${id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
+  const ce2 = (field, html, elObj, style) => `<div contenteditable="true" onfocus="ebFmtFocus('${elObj.id}','body')" onblur="ebElText('${elObj.id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
   if (el.type === 'image') {
     return `<div style="position:relative;width:100%;height:100%;">
       ${el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
@@ -2227,42 +2207,68 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  const PALETTE = [
-    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
-    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
-  ];
+  return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${el.bg ? `background:${el.bg};` : callout}">
+    ${ce2('text', escapeHtml(ebT(el.text)), el, `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
+    <div data-fmtbar="${id}" style="position:absolute;left:0;bottom:0;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;max-width:100%;">
+      ${ebFmtToolbar(el)}
+    </div>
+  </div>`;
+}
+
+// Felles palett (inkl. hvit) + verktøylinje som gjelder aktivt fokus-target
+const EB_PALETTE = [
+  ['var(--ink)', '#1a1610'], ['#ffffff', '#ffffff'], ['var(--red)', '#b83228'],
+  ['var(--blue)', '#1a4a7a'], ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
+];
+function ebFmtTarget(elId) {
+  return (ebb.fmtTarget && ebb.fmtTarget[elId]) || 'body';
+}
+function ebFmtFocus(elId, target) {
+  ebb.fmtTarget = ebb.fmtTarget || {};
+  ebb.fmtTarget[elId] = target;
+  // Bytt kun verktøylinje-innholdet (ikke full re-render → contenteditable beholder fokus)
+  const el = ebElGet(elId);
+  const bar = document.querySelector(`[data-fmtbar="${elId}"]`);
+  if (el && bar) bar.innerHTML = ebFmtToolbar(el);
+}
+function ebFmtToolbar(el) {
+  const id = el.id;
+  const target = ebFmtTarget(id);
+  const isHeader = target === 'header' && el.headerOn;
+  const alignField = isHeader ? 'headerAlign' : 'align';
+  const colorField = isHeader ? 'headerColor' : 'color';
+  const bgField = isHeader ? 'headerBg' : 'bg';
+  const curAlign = isHeader ? (el.headerAlign || 'left') : (el.align || 'left');
+  const curColor = isHeader ? el.headerColor : el.color;
+  const curBg = isHeader ? el.headerBg : el.bg;
+
   const alignIcon = (lines) => `<svg width="15" height="13" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
   const L = { left: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>', center: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>', right: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>' };
-  // align button bound to a given field ('align' for body, 'headerAlign' for header)
-  const alignBtnF = (field, a, cur) => `<button onclick="ebElField('${id}','${field}','${a}')" title="Align ${a}" class="btn btn-sm ${cur === a ? '' : 'btn-ghost'}" style="padding:0 6px;display:inline-flex;align-items:center;color:${cur === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
-  // color swatch bound to a given field ('color' for body, 'headerColor' for header)
-  const swatchF = (field, val, css, cur) => `<button onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;"></button>`;
-  const paletteF = (field, cur) => PALETTE.map(([v, css]) => swatchF(field, v, css, cur)).join('');
+  const alignBtn = (a) => `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${alignField}','${a}')" title="Juster ${a}" class="btn btn-sm ${curAlign === a ? '' : 'btn-ghost'}" style="padding:0 6px;display:inline-flex;align-items:center;color:${curAlign === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
+  const swatch = (field, val, css, cur) => `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
+  const pal = (field, cur) => EB_PALETTE.map(([v, css]) => swatch(field, v, css, cur)).join('');
+  const sep = '<span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;flex:0 0 auto;"></span>';
 
-  const sep = '<span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>';
+  const tag = `<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:${isHeader ? 'var(--blue)' : 'var(--ink3)'};font-weight:700;margin-right:2px;flex:0 0 auto;">${isHeader ? 'Header' : 'Tekst'}</span>`;
 
-  // Body row (always)
-  const bodyRow = `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;max-width:100%;">
-      <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
-      <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
-      <button onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
+  const sizeBoldRow = isHeader ? '' : `
+      <button onmousedown="event.preventDefault()" onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
+      <button onmousedown="event.preventDefault()" onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
+      <button onmousedown="event.preventDefault()" onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
+      ${sep}`;
+
+  return `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;max-width:100%;">
+      ${tag}
+      ${sizeBoldRow}
+      ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
       ${sep}
-      ${alignBtnF('align', 'left', el.align)}${alignBtnF('align', 'center', el.align)}${alignBtnF('align', 'right', el.align)}
+      <span title="Tekstfarge" style="font-size:10px;color:var(--ink3);flex:0 0 auto;">A</span>${pal(colorField, curColor)}
+      <input type="color" value="${curColor || '#3d3628'}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${colorField}',this.value)" title="Egendefinert tekstfarge" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
       ${sep}
-      ${paletteF('color', el.color)}
-      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Custom text color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
+      <span title="Bakgrunn" style="font-size:11px;color:var(--ink3);flex:0 0 auto;">▦</span>${pal(bgField, curBg)}
+      <input type="color" value="${curBg || '#b83228'}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${bgField}',this.value)" title="Egendefinert bakgrunn" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
+      <button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${bgField}','')" title="Ingen bakgrunn" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
     </div>`;
-
-  // Header row (only when header is on) — align, text color, background
-  // Rendered separately in ebElBox so it works for ALL element types.
-
-  const fmt = `<div style="position:absolute;left:0;bottom:0;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;max-width:100%;">
-      ${bodyRow}
-    </div>`;
-  return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${callout}">
-    ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
-    ${fmt}
-  </div>`;
 }
 
 /* inline element mutators */
