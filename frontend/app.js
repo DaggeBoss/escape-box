@@ -1280,6 +1280,8 @@ function ebNormalizeElement(e) {
     headerBg: e.headerBg || '',
     headerColor: e.headerColor || '',
     headerAlign: e.headerAlign || 'left',
+    headerSize: e.headerSize || 14,
+    headerBold: e.headerBold !== undefined ? !!e.headerBold : true,
     // minigame (egen HTML-boks, åpnes i fullskjerm-overlay)
     mg_url: e.mg_url || '',
     mg_path: e.mg_path || '',
@@ -1740,7 +1742,7 @@ function ebPvHeaderBar(el) {
   const bg = el.headerBg;
   const color = el.headerColor || (bg ? '#fff' : 'var(--ink)');
   const style = bg ? `background:${bg};` : `border-bottom:1px solid var(--rule);`;
-  return `<div style="flex:0 0 auto;padding:6px 10px;font-weight:600;font-size:14px;text-align:${el.headerAlign || 'left'};color:${color};${style}">${escapeHtml(ebT(el.header))}</div>`;
+  return `<div style="flex:0 0 auto;padding:6px 10px;font-weight:${el.headerBold ? '700' : '400'};font-size:${el.headerSize || 14}px;text-align:${el.headerAlign || 'left'};color:${color};${style}">${escapeHtml(ebT(el.header))}</div>`;
 }
 
 function ebPvElInner(el) {
@@ -1987,7 +1989,7 @@ function ebMiniCanvasResponsive(card) {
 }
 function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
-  const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};${el.headerBg ? `background:${el.headerBg};color:${el.headerColor || '#fff'};` : `color:${el.headerColor || 'var(--ink)'};border-bottom:1px solid var(--rule);`}">${escapeHtml(ebT(el.header))}</div>` : '';
+  const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:${el.headerBold ? '700' : '400'};font-size:${el.headerSize || 14}px;text-align:${el.headerAlign || 'left'};${el.headerBg ? `background:${el.headerBg};color:${el.headerColor || '#fff'};` : `color:${el.headerColor || 'var(--ink)'};border-bottom:1px solid var(--rule);`}">${escapeHtml(ebT(el.header))}</div>` : '';
   let inner;
   if (el.type === 'image') inner = el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
   else if (el.type === 'question') inner = `<div style="padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
@@ -2128,8 +2130,8 @@ function ebElBox(el) {
   const del = `<button onpointerdown="event.stopPropagation()" onclick="ebDeleteEl('${id}')" title="Delete" style="position:absolute;top:-10px;right:-10px;width:20px;height:20px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;z-index:4;">×</button>`;
   const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
   const headerStrip = el.headerOn ? `
-    <div style="flex:0 0 auto;padding:4px 8px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
-      <div contenteditable="true" onfocus="ebFmtFocus('${id}','header')" onblur="ebElText('${id}','header',this)" style="outline:none;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};color:${el.headerColor || (el.headerBg ? '#fff' : 'var(--ink)')};">${escapeHtml(ebT(el.header))}</div>
+    <div onmousedown="ebFmtFocus('${id}','header-bg')" style="flex:0 0 auto;padding:4px 8px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
+      <div contenteditable="true" onfocus="ebFmtFocus('${id}','header-bg')" onmouseup="ebFmtSelect('${id}','header')" onkeyup="ebFmtSelect('${id}','header')" onblur="ebElText('${id}','header',this)" style="outline:none;font-weight:${el.headerBold ? '700' : '400'};font-size:${el.headerSize || 14}px;text-align:${el.headerAlign || 'left'};color:${el.headerColor || (el.headerBg ? '#fff' : 'var(--ink)')};">${escapeHtml(ebT(el.header))}</div>
     </div>` : '';
   return `
     <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
@@ -2144,7 +2146,7 @@ function ebElBox(el) {
 function ebElEdit(el) {
   const id = el.id;
   const ce = (field, html, style) => `<div contenteditable="true" onblur="ebElText('${id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
-  const ce2 = (field, html, elObj, style) => `<div contenteditable="true" onfocus="ebFmtFocus('${elObj.id}','body')" onblur="ebElText('${elObj.id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
+  const ce2 = (field, html, elObj, style) => `<div contenteditable="true" onfocus="ebFmtFocus('${elObj.id}','body-bg')" onmouseup="ebFmtSelect('${elObj.id}','body')" onkeyup="ebFmtSelect('${elObj.id}','body')" onblur="ebElText('${elObj.id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
   if (el.type === 'image') {
     return `<div style="position:relative;width:100%;height:100%;">
       ${el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
@@ -2215,59 +2217,84 @@ function ebElEdit(el) {
   </div>`;
 }
 
-// Felles palett (inkl. hvit) + verktøylinje som gjelder aktivt fokus-target
-const EB_PALETTE = [
-  ['var(--ink)', '#1a1610'], ['#ffffff', '#ffffff'], ['var(--red)', '#b83228'],
-  ['var(--blue)', '#1a4a7a'], ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
+// ─── Fargepaletter ─────────────────────────────────────────
+// Bakgrunnsfarger: sterke (header) og lyse versjoner (hovedbolk).
+const EB_BG_STRONG = [
+  ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
+  ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'], ['#ffffff', '#ffffff'],
 ];
+const EB_BG_LIGHT = [
+  ['#ece7df', '#ece7df'], ['#f4d9d5', '#f4d9d5'], ['#d8e3ee', '#d8e3ee'],
+  ['#d9e7de', '#d9e7de'], ['#f4e6cc', '#f4e6cc'], ['#ffffff', '#ffffff'],
+];
+// Tekstfarger som gir god kontrast mot bakgrunnene over.
+const EB_TEXT = [
+  ['var(--ink)', '#1a1610'], ['#ffffff', '#ffffff'], ['#8a201a', '#8a201a'],
+  ['#12365c', '#12365c'], ['#1d4e2a', '#1d4e2a'], ['#7a4700', '#7a4700'],
+];
+
+// target er en av: 'body-bg' | 'body-text' | 'header-bg' | 'header-text'
 function ebFmtTarget(elId) {
-  return (ebb.fmtTarget && ebb.fmtTarget[elId]) || 'body';
+  return (ebb.fmtTarget && ebb.fmtTarget[elId]) || 'body-bg';
 }
 function ebFmtFocus(elId, target) {
   ebb.fmtTarget = ebb.fmtTarget || {};
   ebb.fmtTarget[elId] = target;
-  // Bytt kun verktøylinje-innholdet (ikke full re-render → contenteditable beholder fokus)
   const el = ebElGet(elId);
   const bar = document.querySelector(`[data-fmtbar="${elId}"]`);
   if (el && bar) bar.innerHTML = ebFmtToolbar(el);
 }
+// Marker tekst (mouseup/keyup i et felt) → bytt til tekst-target hvis noe er valgt
+function ebFmtSelect(elId, region) {
+  const seltxt = (window.getSelection && String(window.getSelection())) || '';
+  ebFmtFocus(elId, seltxt.trim() ? `${region}-text` : `${region}-bg`);
+}
+
 function ebFmtToolbar(el) {
   const id = el.id;
   const target = ebFmtTarget(id);
-  const isHeader = target === 'header' && el.headerOn;
-  const alignField = isHeader ? 'headerAlign' : 'align';
-  const colorField = isHeader ? 'headerColor' : 'color';
-  const bgField = isHeader ? 'headerBg' : 'bg';
-  const curAlign = isHeader ? (el.headerAlign || 'left') : (el.align || 'left');
-  const curColor = isHeader ? el.headerColor : el.color;
-  const curBg = isHeader ? el.headerBg : el.bg;
+  const inHeader = target.startsWith('header') && el.headerOn;
+  const region = inHeader ? 'header' : 'body';
+  const isText = target.endsWith('-text');
+
+  const alignField = inHeader ? 'headerAlign' : 'align';
+  const curAlign = inHeader ? (el.headerAlign || 'left') : (el.align || 'left');
+
+  // Felt + palett avhengig av tekst/bakgrunn
+  const field = isText ? (inHeader ? 'headerColor' : 'color') : (inHeader ? 'headerBg' : 'bg');
+  const cur = isText ? (inHeader ? el.headerColor : el.color) : (inHeader ? el.headerBg : el.bg);
+  const palette = isText ? EB_TEXT : (inHeader ? EB_BG_STRONG : EB_BG_LIGHT);
 
   const alignIcon = (lines) => `<svg width="15" height="13" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
   const L = { left: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>', center: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>', right: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>' };
   const alignBtn = (a) => `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${alignField}','${a}')" title="Juster ${a}" class="btn btn-sm ${curAlign === a ? '' : 'btn-ghost'}" style="padding:0 6px;display:inline-flex;align-items:center;color:${curAlign === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
-  const swatch = (field, val, css, cur) => `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
-  const pal = (field, cur) => EB_PALETTE.map(([v, css]) => swatch(field, v, css, cur)).join('');
+  const swatch = (val, css) => `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:18px;height:18px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
+  const pal = palette.map(([v, css]) => swatch(v, css)).join('');
   const sep = '<span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;flex:0 0 auto;"></span>';
 
-  const tag = `<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:${isHeader ? 'var(--blue)' : 'var(--ink3)'};font-weight:700;margin-right:2px;flex:0 0 auto;">${isHeader ? 'Header' : 'Tekst'}</span>`;
-
-  const sizeBoldRow = isHeader ? '' : `
-      <button onmousedown="event.preventDefault()" onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
-      <button onmousedown="event.preventDefault()" onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
-      <button onmousedown="event.preventDefault()" onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
+  // Størrelse + fet gjelder aktivt region (header eller body)
+  const sizeField = inHeader ? 'headerSize' : 'size';
+  const boldField = inHeader ? 'headerBold' : 'bold';
+  const isBold = inHeader ? !!el.headerBold : !!el.bold;
+  const sizeBold = `
+      <button onmousedown="event.preventDefault()" onclick="ebElSizeF('${id}','${sizeField}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
+      <button onmousedown="event.preventDefault()" onclick="ebElSizeF('${id}','${sizeField}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
+      <button onmousedown="event.preventDefault()" onclick="ebElToggle('${id}','${boldField}')" class="btn btn-sm ${isBold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
       ${sep}`;
+
+  const label = isText ? `${region === 'header' ? 'Header' : 'Tekst'} · farge`
+                       : `${region === 'header' ? 'Header' : 'Bolk'} · bakgrunn`;
+  const tag = `<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.07em;color:var(--blue);font-weight:700;margin-right:2px;flex:0 0 auto;white-space:nowrap;">${label}</span>`;
+  const clearBg = !isText ? `<button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${field}','')" title="Ingen bakgrunn" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>` : '';
 
   return `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;max-width:100%;">
       ${tag}
-      ${sizeBoldRow}
+      ${sizeBold}
       ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
       ${sep}
-      <span title="Tekstfarge" style="font-size:10px;color:var(--ink3);flex:0 0 auto;">A</span>${pal(colorField, curColor)}
-      <input type="color" value="${curColor || '#3d3628'}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${colorField}',this.value)" title="Egendefinert tekstfarge" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
-      ${sep}
-      <span title="Bakgrunn" style="font-size:11px;color:var(--ink3);flex:0 0 auto;">▦</span>${pal(bgField, curBg)}
-      <input type="color" value="${curBg || '#b83228'}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${bgField}',this.value)" title="Egendefinert bakgrunn" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
-      <button onmousedown="event.preventDefault()" onclick="ebElField('${id}','${bgField}','')" title="Ingen bakgrunn" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
+      ${pal}
+      <input type="color" value="${cur || (isText ? '#1a1610' : '#b83228')}" onmousedown="event.stopPropagation()" onchange="ebElField('${id}','${field}',this.value)" title="Egendefinert" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
+      ${clearBg}
     </div>`;
 }
 
@@ -2282,6 +2309,13 @@ function ebElNum(elId, field, v) { const el = ebElGet(elId); if (!el) return; el
 function ebElStr(elId, field, v) { const el = ebElGet(elId); if (!el) return; el[field] = field === 'code' ? v.trim().toUpperCase() : v.trim(); }
 function ebElCodes(elId, v) { const el = ebElGet(elId); if (!el) return; el.codes = v.split(',').map(s => s.trim().toUpperCase()).filter(Boolean); }
 function ebElSize(elId, d) { const el = ebElGet(elId); if (!el) return; el.size = Math.max(9, Math.min(48, (el.size || 15) + d)); ebDesignerRender(); }
+function ebElSizeF(elId, field, d) {
+  const el = ebElGet(elId); if (!el) return;
+  const def = field === 'headerSize' ? 14 : 15;
+  el[field] = Math.max(9, Math.min(48, (el[field] || def) + d));
+  ebDesignerRender();
+}
+function ebElToggle(elId, field) { const el = ebElGet(elId); if (!el) return; el[field] = !el[field]; ebDesignerRender(); }
 function ebElAlign(elId, a) { const el = ebElGet(elId); if (!el) return; el.align = a; ebDesignerRender(); }
 function ebElBold(elId) { const el = ebElGet(elId); if (!el) return; el.bold = !el.bold; ebDesignerRender(); }
 function ebElField(elId, field, v) { const el = ebElGet(elId); if (!el) return; el[field] = v; ebDesignerRender(); }
