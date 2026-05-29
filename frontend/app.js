@@ -1235,6 +1235,7 @@ function ebNormalizeElement(e) {
     points: e.points || 0,
     code: e.code || '',
     url: e.url || '',
+    thumb: e.thumb || '',
     codes: Array.isArray(e.codes) ? e.codes : [],
     size: e.size || 15,
     align: e.align || 'left',
@@ -1639,7 +1640,7 @@ function ebPvEl(el) {
   const st = ebPvState;
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
   if (el.type === 'image') {
-    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:contain;">` : ''}</div>`;
+    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
   }
   if (el.type === 'link') {
     return `<div style="${pos}padding:4px 6px;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
@@ -1673,7 +1674,7 @@ function ebPvEl(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);border-radius:4px;' : '';
-  return `<div style="${pos}padding:6px 8px;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);line-height:1.5;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
+  return `<div style="${pos}padding:6px 8px;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);line-height:1.4;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
 }
 
 
@@ -1800,7 +1801,7 @@ function ebMiniCanvasHtml(card, width) {
 }
 function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
-  if (el.type === 'image') return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
+  if (el.type === 'image') return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
   if (el.type === 'question') return `<div style="${pos}padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
   if (el.type === 'password') return `<div style="${pos}padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
   if (el.type === 'link') return `<div style="${pos}padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
@@ -2070,7 +2071,7 @@ function ebElEdit(el) {
   const ce = (field, html, style) => `<div contenteditable="true" onblur="ebElText('${id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
   if (el.type === 'image') {
     return `<div style="position:relative;width:100%;height:100%;">
-      ${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
+      ${el.url ? `<img src="${escapeHtml(el.thumb || el.url)}" loading="lazy" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
       <button onclick="ebPickElImage('${id}')" class="btn btn-sm" style="position:absolute;bottom:4px;left:4px;">Upload</button>
     </div>`;
   }
@@ -2113,15 +2114,15 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  const fmt = `<div class="flex-gap" style="gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);">
+  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;">
       <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
       <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
       <button onclick="ebElAlign('${id}','left')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯇</button>
       <button onclick="ebElAlign('${id}','center')" class="btn btn-sm btn-ghost" style="padding:0 6px;">≡</button>
       <button onclick="ebElAlign('${id}','right')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯈</button>
     </div>`;
-  return `<div style="display:flex;flex-direction:column;height:100%;${callout}">
-    ${ce('text', escapeHtml(ebT(el.text)), `flex:1;padding:6px 8px;font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;overflow:auto;`)}
+  return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${callout}">
+    ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;overflow:auto;`)}
     ${fmt}
   </div>`;
 }
@@ -2210,7 +2211,7 @@ function ebPickElImage(elId) {
     try {
       const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards' });
       const el = ebElGet(elId);
-      if (el && res && res.url) { el.url = res.url; showToast('Image uploaded', 'success'); }
+      if (el && res && res.url) { el.url = res.url; el.thumb = res.thumb_url || res.url; showToast('Image uploaded', 'success'); }
       ebDesignerRender();
     } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
   };
