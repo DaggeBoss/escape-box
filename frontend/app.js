@@ -1163,12 +1163,26 @@ async function saveConceptMeta(conceptId) {
 }
 
 /* ─── Modell-hjelpere ───────────────────────────────────── */
+// Aktivt forfatterspråk (Pass 1: kun engelsk). Tekstfelt lagres som
+// språk-map { en: "…" } slik at norsk kan legges til senere uten omarbeiding.
+const EB_LANG = 'en';
+// Faste canvas-mål (designenheter) per overflate. Bredden er fast så
+// kortet alltid fyller sin kolonne; høyden settes per kort. Skaleres
+// identisk i bygger, test og iPad.
+const EB_CANVAS = { work: { w: 700, h: 460 }, ib: { w: 300, h: 520 } };
+
 function ebUid(p) { return `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
+
+// Les/skriv en språk-map (tåler også gammel flat streng)
+function ebT(v) { return v == null ? '' : (typeof v === 'string' ? v : (v[EB_LANG] || v.en || '')); }
+function ebToLang(v) { return (v && typeof v === 'object') ? v : { [EB_LANG]: (v || '') }; }
 
 function ebNormalizeConfig(cfg) {
   cfg = cfg && typeof cfg === 'object' ? cfg : {};
   const cards = Array.isArray(cfg.cards) ? cfg.cards.map((c, i) => ebNormalizeCard(c, i)) : [];
   return {
+    language: cfg.language || 'en',
+    languages: Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'],
     intro: cfg.intro && typeof cfg.intro === 'object'
       ? { title: cfg.intro.title || '', body: cfg.intro.body || '', media_url: cfg.intro.media_url || '' }
       : { title: '', body: '', media_url: '' },
@@ -1186,9 +1200,10 @@ function ebNormalizeCard(c, i) {
   c = c && typeof c === 'object' ? c : {};
   const surface = c.surface === 'ib' ? 'ib' : 'work';
   const req = c.requires && typeof c.requires === 'object' ? c.requires : {};
+  const base = EB_CANVAS[surface];
   return {
     id: c.id || ebUid('card'),
-    title: c.title || '',
+    title: ebToLang(c.title),
     surface,
     code: c.code || '',
     track: Number.isInteger(c.track) ? c.track : 0,
@@ -1197,11 +1212,32 @@ function ebNormalizeCard(c, i) {
       mode: req.mode === 'any' ? 'any' : 'all',
       conditions: Array.isArray(req.conditions) ? req.conditions : [],
     },
-    blocks: Array.isArray(c.blocks) ? c.blocks : [],
+    canvas: { w: base.w, h: (c.canvas && c.canvas.h) || base.h },
+    elements: Array.isArray(c.elements) ? c.elements.map(ebNormalizeElement) : [],
     ib: c.ib && typeof c.ib === 'object' ? c.ib : {
       intro_text: '', active_codes: [], place_count: 1, correct_codes: [],
       points_correct: 0, points_wrong: 0, discard_hint: '', success_text: '',
     },
+  };
+}
+
+function ebNormalizeElement(e) {
+  e = e && typeof e === 'object' ? e : {};
+  return {
+    id: e.id || ebUid('el'),
+    type: e.type || 'text',
+    x: e.x || 20, y: e.y || 20, w: e.w || 200, h: e.h || 60,
+    // tekstbærende felt = språk-map
+    text: ebToLang(e.text),
+    label: ebToLang(e.label),
+    prompt: ebToLang(e.prompt),
+    options: Array.isArray(e.options) ? e.options.map(o => ({ text: ebToLang(o.text), correct: !!o.correct })) : [],
+    points: e.points || 0,
+    code: e.code || '',
+    url: e.url || '',
+    codes: Array.isArray(e.codes) ? e.codes : [],
+    size: e.size || 15,
+    align: e.align || 'left',
   };
 }
 
@@ -1263,21 +1299,7 @@ function ebExit() { ebb = null; goto('concepts'); }
 let ebPvState = null;
 
 function ebOpenPreview() {
-  if (!ebb) return;
-  const cfg = JSON.parse(JSON.stringify(ebb.config));
-  const limit = ebb.concept.time_limit_seconds || 3600;
-  ebPvState = {
-    cfg, limit, timeLeft: limit, timer: null,
-    started: false, score: 0,
-    answeredCorrect: new Set(),
-    enteredCodes: new Set(),
-    ibSolved: new Set(),
-    ibArmed: new Set(),
-  };
-  let ov = document.getElementById('eb-pv-overlay');
-  if (!ov) { ov = document.createElement('div'); ov.id = 'eb-pv-overlay'; document.body.appendChild(ov); }
-  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,22,16,0.6);display:flex;align-items:center;justify-content:center;padding:18px;';
-  ebPvRender();
+  showToast('Participant test view is being rebuilt for the new canvas cards (next pass).', 'info', 4000);
 }
 
 function ebPvClose() {
@@ -1644,7 +1666,7 @@ function ebTileHtml(card) {
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
          style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
       <div class="flex-gap" style="align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${badge} ${fromStart} ${codeChip}</div>
-      <div style="font-weight:600;font-size:14px;margin-bottom:4px;color:var(--ink);">${escapeHtml(card.title || '(uten tittel)')}</div>
+      <div style="font-weight:600;font-size:14px;margin-bottom:4px;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
       ${count}
       <div class="muted" style="font-size:11px;margin-top:6px;line-height:1.5;">
         <div><span style="color:var(--green);">▸ Vises når:</span> ${reqs}</div>
@@ -1663,7 +1685,7 @@ function ebRequiresSummary(card) {
   const parts = conds.map(c => {
     if (c.type === 'card_done') {
       const t = ebCardById(c.card_id);
-      return t ? `«${escapeHtml(t.title || 'kort')}» utført` : '(slettet kort)';
+      return t ? `«${escapeHtml(ebT(t.title) || 'card')}» done` : '(slettet kort)';
     }
     if (c.type === 'code') return `kode ${escapeHtml(c.code)}`;
     return '?';
@@ -1681,7 +1703,7 @@ function ebTriggersSummary(card) {
       (c.type === 'card_done' && c.card_id === card.id) ||
       (c.type === 'code' && card.code && c.code === card.code)
     );
-    if (hit) out.push(`«${escapeHtml(other.title || 'kort')}»`);
+    if (hit) out.push(`«${escapeHtml(ebT(other.title) || 'card')}»`);
   });
   return out.join(', ');
 }
@@ -1713,7 +1735,7 @@ function ebDropNewTrack(ev) {
 
 /* ─── Mutatorer ─────────────────────────────────────────── */
 function ebAddCard(track, surface) {
-  const card = ebNormalizeCard({ id: ebUid('card'), surface, track, order: 1e9, title: surface === 'ib' ? 'IB-runde' : 'Nytt kort' }, 0);
+  const card = ebNormalizeCard({ id: ebUid('card'), surface, track, order: 1e9, title: surface === 'ib' ? 'IB round' : 'New card' }, 0);
   ebb.config.cards.push(card);
   ebNormalizeOrder();
   ebCardModal(card.id);
@@ -1752,7 +1774,9 @@ function ebIntroModal() {
 /* ─── Kort-editor ───────────────────────────────────────── */
 function ebSetCardField(id, field, value) {
   const c = ebCardById(id); if (!c) return;
-  c[field] = field === 'code' ? value.trim().toUpperCase() : value;
+  if (field === 'code') c.code = value.trim().toUpperCase();
+  else if (field === 'title') c.title = { ...(c.title || {}), [EB_LANG]: value };
+  else c[field] = value;
 }
 function ebSetCardSurface(id, value) {
   const c = ebCardById(id); if (!c) return;
@@ -1791,6 +1815,7 @@ function ebSetIbField(id, field, value) {
   }
 }
 
+/* ─── Card settings modal (work + IB) ───────────────────── */
 function ebCardModal(id, gatedView) {
   const c = ebCardById(id); if (!c) return;
   const others = ebb.config.cards.filter(x => x.id !== id);
@@ -1799,66 +1824,333 @@ function ebCardModal(id, gatedView) {
 
   const condRows = conds.map((cond, i) => {
     const label = cond.type === 'card_done'
-      ? `«${escapeHtml((ebCardById(cond.card_id) || {}).title || 'slettet kort')}» utført`
-      : `kode ${escapeHtml(cond.code)}`;
+      ? `«${escapeHtml(ebT((ebCardById(cond.card_id) || {}).title) || 'deleted card')}» done`
+      : `code ${escapeHtml(cond.code)}`;
     return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:4px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
-  }).join('') || '<div class="muted" style="font-size:12px;">Ingen betingelser lagt til ennå.</div>';
+  }).join('') || '<div class="muted" style="font-size:12px;">No conditions yet.</div>';
 
   const gatedBody = `
     <div class="flex-gap" style="margin-bottom:10px;">
-      <span style="font-size:12px;color:var(--ink3);">Oppfyll</span>
+      <span style="font-size:12px;color:var(--ink3);">Match</span>
       <select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;">
-        <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>alle betingelser</option>
-        <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>minst én betingelse</option>
+        <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>all conditions</option>
+        <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>at least one condition</option>
       </select>
     </div>
     ${condRows}
     <div class="field-row" style="margin-top:10px;align-items:flex-end;">
-      <div class="field"><label class="field-label">Krev at kort er utført</label>
-        <select id="eb-cond-card"><option value="">— velg kort —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(o.title || o.id)}</option>`).join('')}</select>
+      <div class="field"><label class="field-label">Require a card is completed</label>
+        <select id="eb-cond-card"><option value="">— select card —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(ebT(o.title) || o.id)}</option>`).join('')}</select>
       </div>
-      <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Legg til</button>
+      <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Add</button>
     </div>
     <div class="field-row" style="align-items:flex-end;">
-      <div class="field"><label class="field-label">Krev kode tastet</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
-      <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Legg til</button>
+      <div class="field"><label class="field-label">Require a code is entered</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
+      <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Add</button>
     </div>`;
 
-  const fromStartBody = `<div class="muted" style="font-size:13px;">Kortet er aktivt fra start — det vises så snart spillet begynner.</div>`;
+  const fromStartBody = `<div class="muted" style="font-size:13px;">Active from start — shown as soon as the game begins.</div>`;
 
-  const contentSection = c.surface === 'ib' ? ebIbFields(c) : ebBlocksSection(c);
+  const layoutSection = c.surface === 'ib' ? ebIbFields(c) : `
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▦</span> Card layout</div>
+      <div class="panel-body">
+        <div class="field"><label class="field-label">Card height (px)</label><input type="number" min="160" max="1400" value="${c.canvas.h}" onchange="ebSetCanvasHeight('${id}', this.value)"></div>
+        <div class="muted" style="font-size:13px;margin:6px 0 12px;">${(c.elements || []).length} element(s) on the canvas.</div>
+        <button class="btn" onclick="ebOpenDesigner('${id}')">Open canvas designer →</button>
+      </div>
+    </div>`;
 
   openModal({
-    title: c.surface === 'ib' ? 'IB-runde' : 'Kort',
+    title: c.surface === 'ib' ? 'IB round' : 'Card',
     size: 'lg',
     body: `
       <div class="field-row">
-        <div class="field"><label class="field-label">Tittel</label><input type="text" value="${escapeHtml(c.title)}" onchange="ebSetCardField('${id}','title',this.value)"></div>
+        <div class="field"><label class="field-label">Title</label><input type="text" value="${escapeHtml(ebT(c.title))}" onchange="ebSetCardField('${id}','title',this.value)"></div>
         <div class="field"><label class="field-label">Type</label>
           <select onchange="ebSetCardSurface('${id}',this.value)">
-            <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Arbeidsområde-kort</option>
-            <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board-runde</option>
+            <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Work-area card</option>
+            <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board round</option>
           </select>
         </div>
       </div>
-      ${c.surface !== 'ib' ? `<div class="field"><label class="field-label">Fysisk kode (valgfritt)</label><input type="text" maxlength="6" value="${escapeHtml(c.code)}" class="col-mono" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Sett kode hvis kortet er et fysisk kort.</span></div>` : ''}
+      ${c.surface !== 'ib' ? `<div class="field"><label class="field-label">Physical code (optional)</label><input type="text" maxlength="6" value="${escapeHtml(c.code)}" class="col-mono" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Set a code if this is a physical card.</span></div>` : ''}
 
       <div class="panel" style="margin-top:14px;">
-        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Vises når</div>
+        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Visible when</div>
         <div class="panel-body">
           <div class="flex-gap" style="margin-bottom:12px;">
-            <button class="btn btn-sm ${gated ? 'btn-ghost' : ''}" onclick="ebReqFromStart('${id}')">Aktiv fra start</button>
-            <button class="btn btn-sm ${gated ? '' : 'btn-ghost'}" onclick="ebReqGated('${id}')">Krever betingelser</button>
+            <button class="btn btn-sm ${gated ? 'btn-ghost' : ''}" onclick="ebReqFromStart('${id}')">Active from start</button>
+            <button class="btn btn-sm ${gated ? '' : 'btn-ghost'}" onclick="ebReqGated('${id}')">Requires conditions</button>
           </div>
           ${gated ? gatedBody : fromStartBody}
         </div>
       </div>
 
-      ${contentSection}
+      ${layoutSection}
     `,
-    footer: `<button class="btn" onclick="ebCloseCardModal()">Ferdig</button>`,
+    footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
   });
 }
+
+function ebSetCanvasHeight(id, value) {
+  const c = ebCardById(id); if (!c) return;
+  c.canvas.h = Math.max(160, Math.min(1400, parseInt(value, 10) || c.canvas.h));
+}
+
+/* ─── Canvas designer (full page, work cards) ───────────── */
+let ebDrag = null;
+
+function ebOpenDesigner(id) {
+  closeModal();
+  ebb.designId = id;
+  ebb.selEl = null;
+  ebDesignerRender();
+}
+function ebExitDesigner() { ebb.designId = null; ebb.selEl = null; renderEbBuilder(); }
+
+function ebDesignerRender() {
+  const root = ebRoot();
+  const c = ebCardById(ebb.designId);
+  if (!root || !c) { renderEbBuilder(); return; }
+  const tools = [
+    ['text', 'Text'], ['info', 'Info'], ['question', 'Question'],
+    ['password', 'Password'], ['link', 'Link'], ['image', 'Image'], ['unlock', 'Open cards'],
+  ].map(([t, label]) => `<button class="btn btn-sm btn-secondary" onclick="ebAddElement('${t}')">+ ${label}</button>`).join(' ');
+
+  root.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-eyebrow">Card · ${escapeHtml(ebb.concept.name)}</div>
+        <div class="page-title">${escapeHtml(ebT(c.title) || 'Card')} — canvas</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" onclick="ebExitDesigner()">← Back to flow</button>
+        <button class="btn btn-secondary" onclick="ebCardModal('${c.id}')">Card settings</button>
+        <button class="btn" onclick="ebSaveAll()">Save all</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">＋</span> Add element <span class="ph-spacer"></span>
+        <span class="muted" style="font-size:11px;">Drag to move · drag the corner to resize · click to select</span>
+      </div>
+      <div class="panel-body"><div class="flex-gap" style="flex-wrap:wrap;">${tools}</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}×${c.canvas.h} — same format as participant view</span></div>
+      <div class="panel-body" style="overflow:auto;">
+        <div onclick="ebSelectEl(null)" style="display:inline-block;">
+          <div id="eb-canvas" style="position:relative;width:${c.canvas.w}px;height:${c.canvas.h}px;background:var(--paper);border:1px solid var(--rule2);box-shadow:0 2px 8px var(--shadow);">
+            ${(c.elements || []).map(el => ebElBox(el)).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function ebElBox(el) {
+  const sel = ebb.selEl === el.id;
+  const inner = ebElPreview(el);
+  const handles = sel ? `
+    <div onpointerdown="ebElResizeDown(event,'${el.id}')" style="position:absolute;right:-6px;bottom:-6px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;"></div>
+    <button onclick="event.stopPropagation();ebElementModal('${el.id}')" style="position:absolute;top:-12px;left:0;background:var(--blue);color:#fff;border:none;border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer;">Edit</button>
+    <button onclick="event.stopPropagation();ebDeleteEl('${el.id}')" style="position:absolute;top:-12px;right:0;background:var(--red);color:#fff;border:none;border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer;">×</button>` : '';
+  return `
+    <div data-elid="${el.id}" onpointerdown="ebElDown(event,'${el.id}')"
+         style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;
+                box-sizing:border-box;outline:${sel ? '2px solid var(--blue)' : '1px dashed var(--rule2)'};
+                background:rgba(255,255,255,0.4);overflow:hidden;cursor:move;">
+      ${inner}${handles}
+    </div>`;
+}
+
+function ebElPreview(el) {
+  const pad = 'padding:6px 8px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;';
+  if (el.type === 'image') {
+    return el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">`
+      : `<div style="${pad}color:var(--ink3);font-size:12px;display:flex;align-items:center;justify-content:center;">No image</div>`;
+  }
+  if (el.type === 'question') {
+    return `<div style="${pad}"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div><div class="muted" style="font-size:11px;">${(el.options || []).length} options</div></div>`;
+  }
+  if (el.type === 'password') {
+    return `<div style="${pad}font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')} <span class="col-mono muted">(${escapeHtml(el.code || '—')})</span></div>`;
+  }
+  if (el.type === 'link') {
+    return `<div style="${pad}font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
+  }
+  if (el.type === 'unlock') {
+    return `<div style="${pad}font-size:12px;color:var(--amber);">Open cards: ${escapeHtml((el.codes || []).join(', ') || '—')}</div>`;
+  }
+  const base = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
+  return `<div style="${pad}${base}font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);">${escapeHtml(ebT(el.text) || (el.type === 'info' ? 'Info' : 'Text'))}</div>`;
+}
+
+/* drag & resize (canvas is 1:1, so client px = design px) */
+function ebElDown(ev, id) {
+  if (ev.target && ev.target.tagName === 'BUTTON') return;
+  ev.stopPropagation();
+  ebb.selEl = id;
+  const el = ebCardById(ebb.designId).elements.find(e => e.id === id);
+  if (!el) return;
+  ebDrag = { id, mode: 'move', sx: ev.clientX, sy: ev.clientY, ox: el.x, oy: el.y, ow: el.w, oh: el.h };
+  document.addEventListener('pointermove', ebDragMove);
+  document.addEventListener('pointerup', ebDragUp);
+  ebDesignerRender();
+}
+function ebElResizeDown(ev, id) {
+  ev.stopPropagation();
+  ebb.selEl = id;
+  const el = ebCardById(ebb.designId).elements.find(e => e.id === id);
+  if (!el) return;
+  ebDrag = { id, mode: 'resize', sx: ev.clientX, sy: ev.clientY, ox: el.x, oy: el.y, ow: el.w, oh: el.h };
+  document.addEventListener('pointermove', ebDragMove);
+  document.addEventListener('pointerup', ebDragUp);
+}
+function ebDragMove(ev) {
+  if (!ebDrag) return;
+  const el = ebCardById(ebb.designId).elements.find(e => e.id === ebDrag.id);
+  const node = document.querySelector(`[data-elid="${ebDrag.id}"]`);
+  if (!el || !node) return;
+  const dx = ev.clientX - ebDrag.sx, dy = ev.clientY - ebDrag.sy;
+  if (ebDrag.mode === 'move') {
+    el.x = Math.max(0, Math.round(ebDrag.ox + dx));
+    el.y = Math.max(0, Math.round(ebDrag.oy + dy));
+    node.style.left = el.x + 'px'; node.style.top = el.y + 'px';
+  } else {
+    el.w = Math.max(40, Math.round(ebDrag.ow + dx));
+    el.h = Math.max(24, Math.round(ebDrag.oh + dy));
+    node.style.width = el.w + 'px'; node.style.height = el.h + 'px';
+  }
+}
+function ebDragUp() {
+  document.removeEventListener('pointermove', ebDragMove);
+  document.removeEventListener('pointerup', ebDragUp);
+  ebDrag = null;
+  ebDesignerRender();
+}
+
+function ebAddElement(type) {
+  const c = ebCardById(ebb.designId); if (!c) return;
+  const sizes = {
+    text: { w: 300, h: 60 }, info: { w: 320, h: 80 }, question: { w: 360, h: 140 },
+    password: { w: 260, h: 56 }, link: { w: 240, h: 44 }, image: { w: 220, h: 160 }, unlock: { w: 300, h: 56 },
+  };
+  const s = sizes[type] || { w: 220, h: 60 };
+  const el = ebNormalizeElement({ id: ebUid('el'), type, x: 24, y: 24, w: s.w, h: s.h });
+  c.elements.push(el);
+  ebb.selEl = el.id;
+  ebDesignerRender();
+  ebElementModal(el.id);
+}
+function ebSelectEl(id) { ebb.selEl = id; ebDesignerRender(); }
+function ebDeleteEl(id) {
+  const c = ebCardById(ebb.designId); if (!c) return;
+  c.elements = c.elements.filter(e => e.id !== id);
+  if (ebb.selEl === id) ebb.selEl = null;
+  ebDesignerRender();
+}
+
+/* element editor modal */
+function ebElementModal(elId) {
+  const c = ebCardById(ebb.designId); if (!c) return;
+  const el = c.elements.find(e => e.id === elId); if (!el) return;
+  let fields = '';
+  if (el.type === 'text' || el.type === 'info') {
+    fields = `
+      <div class="field"><label class="field-label">Text</label><textarea id="eb-el-text" rows="4">${escapeHtml(ebT(el.text))}</textarea></div>
+      <div class="field-row">
+        <div class="field"><label class="field-label">Font size (px)</label><input id="eb-el-size" type="number" min="9" max="48" value="${el.size || 15}"></div>
+        <div class="field"><label class="field-label">Align</label><select id="eb-el-align">
+          ${['left', 'center', 'right'].map(a => `<option value="${a}" ${el.align === a ? 'selected' : ''}>${a}</option>`).join('')}
+        </select></div>
+      </div>`;
+  } else if (el.type === 'question') {
+    const optText = (el.options || []).map(o => (o.correct ? '*' : '') + ebT(o.text)).join('\n');
+    fields = `
+      <div class="field"><label class="field-label">Question</label><textarea id="eb-el-prompt" rows="2">${escapeHtml(ebT(el.prompt))}</textarea></div>
+      <div class="field"><label class="field-label">Answer options (one per line, * before the correct one)</label><textarea id="eb-el-options" rows="5" placeholder="*Correct answer&#10;Wrong answer&#10;Wrong answer">${escapeHtml(optText)}</textarea></div>
+      <div class="field"><label class="field-label">Points</label><input id="eb-el-points" type="number" value="${el.points || 0}"></div>`;
+  } else if (el.type === 'password') {
+    fields = `
+      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}" placeholder="Enter the code"></div>
+      <div class="field-row">
+        <div class="field"><label class="field-label">Correct code</label><input id="eb-el-code" type="text" class="col-mono" value="${escapeHtml(el.code)}"></div>
+        <div class="field"><label class="field-label">Points</label><input id="eb-el-points" type="number" value="${el.points || 0}"></div>
+      </div>`;
+  } else if (el.type === 'link') {
+    fields = `
+      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}"></div>
+      <div class="field"><label class="field-label">URL</label><input id="eb-el-url" type="text" value="${escapeHtml(el.url)}" placeholder="https://…"></div>`;
+  } else if (el.type === 'unlock') {
+    fields = `
+      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}" placeholder="Open the following cards"></div>
+      <div class="field"><label class="field-label">Physical codes (comma-separated)</label><input id="eb-el-codes" type="text" class="col-mono" value="${escapeHtml((el.codes || []).join(', '))}"></div>`;
+  } else if (el.type === 'image') {
+    fields = `
+      ${el.url ? `<img src="${escapeHtml(el.url)}" style="max-width:100%;max-height:200px;border:1px solid var(--rule);border-radius:6px;margin-bottom:10px;">` : ''}
+      <div class="field"><label class="field-label">Image</label><button class="btn btn-sm btn-secondary" onclick="ebPickElImage('${el.id}')">Upload image</button></div>
+      <div class="field"><label class="field-label">…or image URL</label><input id="eb-el-url" type="text" value="${escapeHtml(el.url)}" placeholder="https://…"></div>`;
+  }
+  openModal({
+    title: `Edit ${el.type}`,
+    body: fields,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Close</button><button class="btn" onclick="ebSaveElement('${el.id}')">Save</button>`,
+  });
+}
+
+function ebSaveElement(elId) {
+  const c = ebCardById(ebb.designId); if (!c) return;
+  const el = c.elements.find(e => e.id === elId); if (!el) return;
+  const setT = (field, val) => { el[field] = { ...(el[field] || {}), [EB_LANG]: val }; };
+  if (el.type === 'text' || el.type === 'info') {
+    setT('text', $('#eb-el-text').value);
+    el.size = parseInt($('#eb-el-size').value, 10) || 15;
+    el.align = $('#eb-el-align').value;
+  } else if (el.type === 'question') {
+    setT('prompt', $('#eb-el-prompt').value.trim());
+    el.options = $('#eb-el-options').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+      const correct = l.startsWith('*');
+      return { text: { [EB_LANG]: correct ? l.slice(1).trim() : l }, correct };
+    });
+    el.points = parseInt($('#eb-el-points').value, 10) || 0;
+  } else if (el.type === 'password') {
+    setT('label', $('#eb-el-label').value.trim());
+    el.code = $('#eb-el-code').value.trim().toUpperCase();
+    el.points = parseInt($('#eb-el-points').value, 10) || 0;
+  } else if (el.type === 'link') {
+    setT('label', $('#eb-el-label').value.trim());
+    el.url = $('#eb-el-url').value.trim();
+  } else if (el.type === 'unlock') {
+    setT('label', $('#eb-el-label').value.trim());
+    el.codes = $('#eb-el-codes').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  } else if (el.type === 'image') {
+    const u = $('#eb-el-url'); if (u) el.url = u.value.trim();
+  }
+  closeModal();
+  ebDesignerRender();
+}
+
+function ebPickElImage(elId) {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    showToast('Uploading image…', 'info');
+    try {
+      const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards' });
+      const c = ebCardById(ebb.designId);
+      const el = c && c.elements.find(e => e.id === elId);
+      if (el && res && res.url) { el.url = res.url; showToast('Image uploaded', 'success'); }
+      ebElementModal(elId);
+    } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
+  };
+  inp.click();
+}
+
 
 // Sett kortet aktivt fra start (tøm betingelser)
 function ebReqFromStart(id) {
@@ -1869,7 +2161,7 @@ function ebReqFromStart(id) {
 // Vis betingelse-kontrollene (selv om ingen er lagt til ennå)
 function ebReqGated(id) { ebCardModal(id, true); }
 
-function ebCloseCardModal() { closeModal(); renderEbBuilder(); }
+function ebCloseCardModal() { closeModal(); if (ebb.designId) ebDesignerRender(); else renderEbBuilder(); }
 
 function ebBlocksSection(c) {
   const rows = (c.blocks || []).map((b, i) => {
