@@ -194,6 +194,11 @@ async function initDatabase() {
         UNIQUE(event_id, code)
       )
     `);
+    // Legacy: eldre baser kan mangle disse kolonnene (CREATE IF NOT EXISTS
+    // legger ikke til kolonner på en tabell som allerede finnes). Uten FK
+    // her, så migreringen aldri feiler på eksisterende rader.
+    await pool.query(`ALTER TABLE teams ADD COLUMN IF NOT EXISTS event_id INTEGER`);
+    await pool.query(`ALTER TABLE teams ADD COLUMN IF NOT EXISTS color VARCHAR(20) DEFAULT '#ff4444'`);
     console.log('  ✓ teams');
   } catch (e) { console.error('  ✗ teams:', e.message); }
 
