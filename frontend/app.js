@@ -1147,7 +1147,7 @@ async function openConceptBuilder(conceptId) {
   try { c = await api(`/api/concepts/${conceptId}`); }
   catch (e) { showToast('Kunne ikke hente konsept: ' + e.message, 'error'); return; }
   if (c.key === 'escape_box') {
-    ebb = { conceptId, concept: c, config: ebNormalizeConfig(c.config), tab: 'cards' };
+    ebb = { conceptId, concept: c, config: ebNormalizeConfig(c.config), tab: 'cards', triggerSelect: null };
     renderEbBuilder();
   } else {
     openSimpleConceptMeta(c);
@@ -1277,6 +1277,10 @@ function ebNormalizeElement(e) {
     headerOn: e.headerOn !== undefined ? !!e.headerOn : !!ebT(e.header),
     header: ebToLang(e.header),
     headerBg: e.headerBg || '',
+    headerColor: e.headerColor || '',
+    headerAlign: e.headerAlign || 'left',
+    headerAlign: e.headerAlign || 'left',
+    headerColor: e.headerColor || '',
     // minigame (egen HTML-boks, åpnes i fullskjerm-overlay)
     mg_url: e.mg_url || '',
     mg_path: e.mg_path || '',
@@ -1705,8 +1709,9 @@ function ebPvEl(el) {
 
 function ebPvHeaderBar(el) {
   const bg = el.headerBg;
-  const style = bg ? `background:${bg};color:#fff;` : `color:var(--ink);border-bottom:1px solid var(--rule);`;
-  return `<div style="flex:0 0 auto;padding:6px 10px;font-weight:600;font-size:14px;${style}">${escapeHtml(ebT(el.header))}</div>`;
+  const color = el.headerColor || (bg ? '#fff' : 'var(--ink)');
+  const style = bg ? `background:${bg};` : `border-bottom:1px solid var(--rule);`;
+  return `<div style="flex:0 0 auto;padding:6px 10px;font-weight:600;font-size:14px;text-align:${el.headerAlign || 'left'};color:${color};${style}">${escapeHtml(ebT(el.header))}</div>`;
 }
 
 function ebPvElInner(el) {
@@ -1768,28 +1773,31 @@ function ebPvElInner(el) {
 
 function ebCardsTab() {
   const c = ebb.config;
-  const maxT = ebMaxTrack();
-  let columns = '';
-  for (let t = 0; t <= Math.max(0, maxT); t++) {
-    const cards = c.cards.filter(x => x.track === t).sort((a, b) => a.order - b.order);
-    columns += `
-      <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnTrack(event, ${t})"
-           style="flex:0 0 290px;background:var(--bg2,#11151f);border:1px solid var(--bg3);border-radius:12px;padding:10px;">
-        <div class="muted" style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;">${t === 0 ? 'Hovedløp' : 'Parallelt løp ' + t}</div>
-        ${cards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;">Tomt løp</div>'}
-        <div class="flex-gap" style="margin-top:8px;">
-          <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${t}, 'work')">+ Kort</button>
-          <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${t}, 'ib')">+ IB-runde</button>
-        </div>
-      </div>`;
-  }
-  // Drop-sone for nytt parallelt løp
-  columns += `
-    <div ondragover="event.preventDefault()" ondrop="ebDropNewTrack(event)"
-         style="flex:0 0 150px;border:1px dashed var(--bg3);border-radius:12px;padding:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--ink3,#8a93a6);">
-      <div style="font-size:12px;text-align:center;">Slipp her for nytt parallelt løp</div>
-      <button class="btn btn-sm btn-secondary" onclick="ebAddCard(${maxT + 1 < 1 ? 1 : maxT + 1}, 'work')">+ Nytt løp</button>
+  const sel = ebb.triggerSelect; // { forId, picked:Set } eller null
+
+  const workCards = c.cards.filter(x => x.surface !== 'ib').sort((a, b) => a.track - b.track || a.order - b.order);
+  const ibCards = c.cards.filter(x => x.surface === 'ib').sort((a, b) => a.track - b.track || a.order - b.order);
+
+  const colHtml = (title, accent, cards, surface) => `
+    <div class="eb-col" ondragover="event.preventDefault()" ondrop="ebDropOnCol(event,'${surface}')"
+         style="flex:1 1 0;min-width:0;background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:12px;">
+      <div class="flex-gap" style="align-items:center;margin-bottom:10px;">
+        <span style="width:10px;height:10px;border-radius:3px;background:${accent};"></span>
+        <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;font-size:13px;color:var(--ink2);flex:1;">${title}</span>
+        <span class="muted" style="font-size:11px;">${cards.length}</span>
+      </div>
+      ${cards.map(card => ebTileHtml(card)).join('') || '<div class="muted" style="font-size:12px;padding:8px;">Ingen kort.</div>'}
+      <button class="btn btn-sm btn-secondary" style="margin-top:6px;width:100%;" onclick="ebAddCard(0,'${surface}')">+ ${surface === 'ib' ? 'IB-kort' : 'Arbeidskort'}</button>
     </div>`;
+
+  const triggerBar = sel ? (() => {
+    const forCard = ebCardById(sel.forId);
+    return `<div style="position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;background:var(--amber);color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:12px;">
+      <span style="flex:1;font-size:14px;">Marker kortene som må fullføres før <strong>«${escapeHtml(ebT(forCard && forCard.title) || 'kort')}»</strong> vises. Ingen markering = vises fra start.</span>
+      <button class="btn btn-sm" onclick="ebTriggerCancel()" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.6);">Avbryt</button>
+      <button class="btn btn-sm" onclick="ebTriggerCommit()" style="background:#fff;color:var(--amber);">✓ Sett triggere</button>
+    </div>`;
+  })() : '';
 
   return `
     <div class="panel">
@@ -1805,12 +1813,14 @@ function ebCardsTab() {
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">▦</span> Kort &amp; flyt
         <span class="ph-spacer"></span>
-        <span class="muted" style="font-size:11px;">Dra kort opp/ned eller til et annet løp</span>
+        <span class="muted" style="font-size:11px;">${sel ? 'Velg-modus aktiv' : 'Trykk «Velg triggere» på et kort for å koble fullføring'}</span>
       </div>
       <div class="panel-body">
-        ${c.cards.length === 0 ? '<div class="muted" style="margin-bottom:10px;">Ingen kort ennå. Legg til et kort eller en IB-runde nedenfor.</div>' : ''}
-        <div style="display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding-bottom:6px;">
-          ${columns}
+        ${triggerBar}
+        ${c.cards.length === 0 ? '<div class="muted" style="margin-bottom:10px;">Ingen kort ennå. Legg til et kort nedenfor.</div>' : ''}
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          ${colHtml('Arbeidsområde', 'var(--blue)', workCards, 'work')}
+          ${colHtml('Investigation Board', 'var(--amber)', ibCards, 'ib')}
         </div>
       </div>
     </div>
@@ -1819,59 +1829,84 @@ function ebCardsTab() {
 
 function ebTileHtml(card) {
   const isIb = card.surface === 'ib';
-  const reqs = ebRequiresSummary(card);
-  const trig = ebTriggersSummary(card);
-  const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">${escapeHtml(card.code)}</span>` : '';
-  const fromStart = ((card.requires.conditions || []).length === 0) ? '<span class="badge green">From start</span>' : '';
-  const editClick = `ebOpenDesigner('${card.id}')`;
+  const sel = ebb.triggerSelect;
   const thumb = ebMiniCanvasHtml(card, isIb ? 150 : 256);
+  const reqCount = (card.requires.conditions || []).filter(x => x.type === 'card_done').length;
+  const fromStart = reqCount === 0 ? '<span class="badge green">Fra start</span>' : `<span class="badge amber">${reqCount} trigger${reqCount > 1 ? 'e' : ''}</span>`;
+
+  // ── Velg-modus: dette kortet kan markeres som trigger for sel.forId ──
+  if (sel) {
+    if (card.id === sel.forId) {
+      // Selve kortet vi setter triggere for — vis, men ikke markerbart
+      return `<div style="background:var(--paper);border:2px solid var(--amber);border-radius:10px;padding:10px;margin-bottom:8px;opacity:0.95;">
+        ${thumb}
+        <div style="font-weight:600;font-size:14px;margin:8px 0 4px;color:var(--amber);">▸ Setter triggere for dette kortet</div>
+      </div>`;
+    }
+    const picked = sel.picked.has(card.id);
+    return `<div onclick="ebTriggerToggle('${card.id}')" style="cursor:pointer;background:var(--paper);border:2px solid ${picked ? 'var(--green)' : 'var(--rule)'};border-radius:10px;padding:10px;margin-bottom:8px;position:relative;">
+      <div style="position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:6px;border:2px solid ${picked ? 'var(--green)' : 'var(--rule2)'};background:${picked ? 'var(--green)' : 'var(--paper)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;z-index:2;">${picked ? '✓' : ''}</div>
+      ${thumb}
+      <div style="font-weight:600;font-size:14px;margin:8px 0 0;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
+    </div>`;
+  }
+
+  // ── Normal modus ──
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
          style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px;margin-bottom:8px;">
-      <div onclick="${editClick}" style="cursor:pointer;" title="Edit card">
+      <div onclick="ebOpenDesigner('${card.id}')" style="cursor:pointer;" title="Rediger kort">
         ${thumb}
         <div style="font-weight:600;font-size:14px;margin:8px 0 4px;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
       </div>
-      <div class="flex-gap" style="flex-wrap:wrap;gap:5px;margin-bottom:6px;">
-        <span class="badge ${isIb ? 'amber' : 'blue'}">${isIb ? 'IB' : 'Work'}</span>${fromStart}${codeChip}
-      </div>
-      <div class="muted" style="font-size:11px;line-height:1.5;margin-bottom:8px;">
-        <div><span style="color:var(--green);">▸ shows when:</span> ${reqs}</div>
-        ${trig ? `<div><span style="color:var(--amber);">▸ opens:</span> ${trig}</div>` : ''}
-      </div>
+      <div class="flex-gap" style="flex-wrap:wrap;gap:5px;margin-bottom:8px;">${fromStart}</div>
+      ${reqCount ? `<div class="muted" style="font-size:11px;line-height:1.5;margin-bottom:8px;"><span style="color:var(--green);">▸ vises når disse er fullført:</span> ${ebRequiresSummary(card)}</div>` : ''}
       <div class="flex-gap">
-        <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggersModal('${card.id}')">Triggers</button>
-        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();ebDeleteCard('${card.id}')">Delete</button>
+        <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggerStart('${card.id}')">Velg triggere</button>
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();ebDeleteCard('${card.id}')">Slett</button>
       </div>
     </div>`;
 }
 
 function ebRequiresSummary(card) {
-  const conds = card.requires.conditions || [];
-  if (conds.length === 0) return 'from start';
-  const parts = conds.map(c => {
-    if (c.type === 'card_done') {
-      const t = ebCardById(c.card_id);
-      return t ? `«${escapeHtml(ebT(t.title) || 'card')}» done` : '(deleted card)';
-    }
-    if (c.type === 'code') return `code ${escapeHtml(c.code)}`;
-    return '?';
-  });
-  return parts.join(card.requires.mode === 'any' ? ' or ' : ' and ');
+  const conds = (card.requires.conditions || []).filter(c => c.type === 'card_done');
+  if (conds.length === 0) return 'fra start';
+  return conds.map(c => {
+    const t = ebCardById(c.card_id);
+    return t ? `«${escapeHtml(ebT(t.title) || 'kort')}»` : '(slettet kort)';
+  }).join(', ');
 }
 
-function ebTriggersSummary(card) {
-  const out = [];
-  ebb.config.cards.forEach(other => {
-    if (other.id === card.id) return;
-    const conds = other.requires.conditions || [];
-    const hit = conds.some(c =>
-      (c.type === 'card_done' && c.card_id === card.id) ||
-      (c.type === 'code' && card.code && c.code === card.code)
-    );
-    if (hit) out.push(`«${escapeHtml(ebT(other.title) || 'card')}»`);
-  });
-  return out.join(', ');
+/* ─── Trigger-velg-flyt ─────────────────────────────────── */
+function ebTriggerStart(cardId) {
+  const c = ebCardById(cardId); if (!c) return;
+  const picked = new Set((c.requires.conditions || [])
+    .filter(x => x.type === 'card_done' && ebCardById(x.card_id))
+    .map(x => x.card_id));
+  ebb.triggerSelect = { forId: cardId, picked };
+  renderEbBuilder();
+}
+function ebTriggerToggle(cardId) {
+  const sel = ebb.triggerSelect; if (!sel) return;
+  if (sel.picked.has(cardId)) sel.picked.delete(cardId); else sel.picked.add(cardId);
+  renderEbBuilder();
+}
+function ebTriggerCommit() {
+  const sel = ebb.triggerSelect; if (!sel) return;
+  const c = ebCardById(sel.forId);
+  if (c) {
+    c.requires = {
+      mode: 'all',
+      conditions: [...sel.picked].map(id => ({ type: 'card_done', card_id: id })),
+    };
+  }
+  ebb.triggerSelect = null;
+  showToast('Triggere satt', 'success');
+  renderEbBuilder();
+}
+function ebTriggerCancel() {
+  ebb.triggerSelect = null;
+  renderEbBuilder();
 }
 
 /* Mini static render of a card's canvas (for the overview thumbnails) */
@@ -1887,7 +1922,7 @@ function ebMiniCanvasHtml(card, width) {
 }
 function ebMiniEl(el) {
   const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
-  const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:600;font-size:13px;${el.headerBg ? `background:${el.headerBg};color:#fff;` : 'color:var(--ink);border-bottom:1px solid var(--rule);'}">${escapeHtml(ebT(el.header))}</div>` : '';
+  const header = el.headerOn ? `<div style="flex:0 0 auto;padding:5px 8px;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};${el.headerBg ? `background:${el.headerBg};color:${el.headerColor || '#fff'};` : `color:${el.headerColor || 'var(--ink)'};border-bottom:1px solid var(--rule);`}">${escapeHtml(ebT(el.header))}</div>` : '';
   let inner;
   if (el.type === 'image') inner = el.url ? `<img src="${escapeHtml(ebImgUrl(el.thumb || el.url))}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;display:block;">` : '';
   else if (el.type === 'question') inner = `<div style="padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).filter(o => ebT(o.text).trim()).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
@@ -1905,22 +1940,20 @@ function ebDropOnCard(ev, targetId) {
   ev.preventDefault(); ev.stopPropagation();
   const d = ebCardById(ebDragId), t = ebCardById(targetId);
   if (!d || !t || d.id === t.id) { ebDragId = null; return; }
+  // Flytt inn i målets surface, rett før målet
+  d.surface = t.surface;
+  d.canvas = { w: EB_CANVAS[d.surface].w, h: (d.canvas && d.canvas.h) || EB_CANVAS[d.surface].h };
   d.track = t.track;
   d.order = t.order - 0.5;
   ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
 }
-function ebDropOnTrack(ev, track) {
+function ebDropOnCol(ev, surface) {
   ev.preventDefault();
   const d = ebCardById(ebDragId);
   if (!d) return;
-  d.track = track; d.order = 1e9;
-  ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
-}
-function ebDropNewTrack(ev) {
-  ev.preventDefault();
-  const d = ebCardById(ebDragId);
-  if (!d) return;
-  d.track = ebMaxTrack() + 1; d.order = 0;
+  d.surface = surface === 'ib' ? 'ib' : 'work';
+  d.canvas = { w: EB_CANVAS[d.surface].w, h: (d.canvas && d.canvas.h) || EB_CANVAS[d.surface].h };
+  d.order = 1e9; // bakerst
   ebNormalizeOrder(); ebDragId = null; renderEbBuilder();
 }
 
@@ -1969,95 +2002,6 @@ function ebSetCardField(id, field, value) {
   else if (field === 'title') c.title = { ...(c.title || {}), [EB_LANG]: value };
   else c[field] = value;
 }
-function ebSetCardSurface(id, value) {
-  const c = ebCardById(id); if (!c) return;
-  c.surface = value === 'ib' ? 'ib' : 'work';
-  // Bytt canvas-bredde til riktig flate (beholder hoyde)
-  c.canvas = { w: EB_CANVAS[c.surface].w, h: (c.canvas && c.canvas.h) || EB_CANVAS[c.surface].h };
-  ebOpenDesigner(id);
-}
-function ebSetReqMode(id, mode) {
-  const c = ebCardById(id); if (!c) return;
-  c.requires.mode = mode === 'any' ? 'any' : 'all';
-}
-function ebAddCardCond(id) {
-  const sel = $('#eb-cond-card'); if (!sel || !sel.value) return;
-  const c = ebCardById(id); if (!c) return;
-  c.requires.conditions.push({ type: 'card_done', card_id: sel.value });
-  ebReqRefresh();
-}
-function ebAddCodeCond(id) {
-  const inp = $('#eb-cond-code'); if (!inp || !inp.value.trim()) return;
-  const c = ebCardById(id); if (!c) return;
-  c.requires.conditions.push({ type: 'code', code: inp.value.trim().toUpperCase() });
-  ebReqRefresh();
-}
-function ebRemoveCond(id, idx) {
-  const c = ebCardById(id); if (!c) return;
-  c.requires.conditions.splice(idx, 1);
-  ebReqRefresh();
-}
-
-/* ─── Triggers / links (overview metadata) ──────────────── */
-let ebReqHost = null;
-function ebReqRefresh() { if (ebReqHost) ebReqHost(); }
-
-function ebVisibilityHtml(id) {
-  const c = ebCardById(id); if (!c) return '';
-  const conds = c.requires.conditions || [];
-  const others = ebb.config.cards.filter(x => x.id !== id);
-  const rows = conds.map((cond, i) => {
-    const label = cond.type === 'card_done'
-      ? `«${escapeHtml(ebT((ebCardById(cond.card_id) || {}).title) || 'deleted card')}» done`
-      : `code ${escapeHtml(cond.code)}`;
-    return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:3px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
-  }).join('') || '<div class="muted" style="font-size:12px;">Active from start (no conditions).</div>';
-  const modeSel = conds.length > 1
-    ? `<div class="flex-gap" style="margin-bottom:8px;"><span style="font-size:12px;color:var(--ink3);">Match</span><select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;"><option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>all conditions</option><option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>at least one</option></select></div>`
-    : '';
-  const clearBtn = conds.length ? `<button class="btn btn-sm btn-ghost" style="margin-top:10px;" onclick="ebReqFromStart('${id}')">Set active from start</button>` : '';
-  return `
-    <div class="panel" style="margin-top:14px;">
-      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Visible when</div>
-      <div class="panel-body">
-        ${modeSel}${rows}
-        <div class="field-row" style="margin-top:10px;align-items:flex-end;">
-          <div class="field"><label class="field-label">Require a card is completed</label>
-            <select id="eb-cond-card"><option value="">— select card —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(ebT(o.title) || o.id)}</option>`).join('')}</select>
-          </div>
-          <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Add</button>
-        </div>
-        <div class="field-row" style="align-items:flex-end;">
-          <div class="field"><label class="field-label">Require a code is entered</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
-          <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Add</button>
-        </div>
-        ${clearBtn}
-      </div>
-    </div>`;
-}
-
-const EB_TYPE_SELECT = (id, c) => `<select onchange="ebSetCardSurface('${id}',this.value)">
-    <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Work-area card</option>
-    <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board round</option>
-  </select>`;
-
-function ebTriggersModal(id) {
-  const c = ebCardById(id); if (!c) return;
-  ebReqHost = () => ebTriggersModal(id);
-  openModal({
-    title: 'Triggers & links',
-    size: 'lg',
-    body: `
-      <div class="field-row">
-        <div class="field"><label class="field-label">Type</label>${EB_TYPE_SELECT(id, c)}</div>
-        <div class="field"><label class="field-label">Physical code (optional)</label><input type="text" maxlength="6" class="col-mono" value="${escapeHtml(c.code)}" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Other cards can require this code.</span></div>
-      </div>
-      ${ebVisibilityHtml(id)}
-    `,
-    footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
-  });
-}
-
 /* ─── Canvas designer (full page, work cards) ───────────── */
 let ebDrag = null;
 
@@ -2086,9 +2030,8 @@ function ebDesignerRender() {
         <input value="${escapeHtml(ebT(c.title))}" placeholder="Card title" onchange="ebSetCardField('${c.id}','title',this.value)" style="font-family:var(--font-serif);font-size:22px;font-weight:600;border:none;border-bottom:1px dashed var(--rule);background:transparent;color:var(--ink);padding:2px 0;min-width:280px;">
       </div>
       <div class="page-actions">
-        <button class="btn btn-secondary" onclick="ebExitDesigner()">← Back to flow</button>
-        <button class="btn btn-secondary" onclick="ebTriggersModal('${c.id}')">Triggers</button>
-        <button class="btn" onclick="ebSaveAll()">Save all</button>
+        <button class="btn btn-secondary" onclick="ebExitDesigner()">← Tilbake til flyt</button>
+        <button class="btn" onclick="ebSaveAll()">Lagre alt</button>
       </div>
     </div>
     <div class="panel">
@@ -2112,6 +2055,31 @@ function ebDesignerRender() {
   `;
 }
 
+/* Header toolbar (align, text color, background) — shown for any element with header on */
+function ebHeaderToolbar(el) {
+  const id = el.id;
+  const PALETTE = [
+    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
+    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
+  ];
+  const alignIcon = (lines) => `<svg width="14" height="12" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
+  const L = { left: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>', center: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>', right: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>' };
+  const alignBtn = (a) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerAlign','${a}')" title="Align ${a}" class="btn btn-sm ${el.headerAlign === a ? '' : 'btn-ghost'}" style="padding:0 5px;display:inline-flex;align-items:center;color:${el.headerAlign === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
+  const swatch = (field, val, css, cur) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:15px;height:15px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
+  const pal = (field, cur) => PALETTE.map(([v, css]) => swatch(field, v, css, cur)).join('');
+  const sep = '<span style="width:1px;height:16px;background:var(--rule2);margin:0 2px;flex:0 0 auto;"></span>';
+  return `<div class="flex-gap" style="flex:0 0 auto;align-items:center;gap:3px;flex-wrap:wrap;padding:3px 6px;background:var(--bg2);border-bottom:1px solid var(--rule);">
+      <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink3);font-weight:700;margin-right:1px;flex:0 0 auto;">Hdr</span>
+      ${alignBtn('left')}${alignBtn('center')}${alignBtn('right')}
+      ${sep}
+      <span title="Text color" style="font-size:10px;color:var(--ink3);flex:0 0 auto;">A</span>${pal('headerColor', el.headerColor)}
+      ${sep}
+      <span title="Background" style="font-size:11px;color:var(--ink3);flex:0 0 auto;">▦</span>${pal('headerBg', el.headerBg)}
+      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" onpointerdown="event.stopPropagation()" title="Custom background" style="width:20px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
+      <button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','')" title="No background" style="background:var(--paper);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
+    </div>`;
+}
+
 /* Element on the designer canvas — inline editable (type directly) */
 function ebElBox(el) {
   const id = el.id;
@@ -2119,18 +2087,11 @@ function ebElBox(el) {
   const hBtn = `<button onpointerdown="event.stopPropagation()" onclick="ebElToggleHeader('${id}')" title="Header on/off" style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);height:20px;padding:0 9px;background:${el.headerOn ? 'var(--blue)' : 'var(--ink3)'};color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:10px;z-index:4;">H</button>`;
   const del = `<button onpointerdown="event.stopPropagation()" onclick="ebDeleteEl('${id}')" title="Delete" style="position:absolute;top:-10px;right:-10px;width:20px;height:20px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;z-index:4;">×</button>`;
   const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
-  const hSwatch = (val, css) => `<button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','${val}')" title="${val}" style="width:16px;height:16px;border-radius:50%;border:2px solid ${(el.headerBg || '') === val ? '#fff' : 'rgba(255,255,255,0.4)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;flex:0 0 auto;"></button>`;
-  const hPalette = [
-    ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
-    ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
-  ].map(([v, css]) => hSwatch(v, css)).join('');
   const headerStrip = el.headerOn ? `
-    <div style="flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:3px 6px;flex-wrap:wrap;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
-      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="flex:1;min-width:60px;outline:none;font-weight:600;font-size:13px;color:${el.headerBg ? '#fff' : 'var(--ink)'};">${escapeHtml(ebT(el.header))}</div>
-      ${hPalette}
-      <input type="color" value="${el.headerBg || '#b83228'}" onchange="ebElField('${id}','headerBg',this.value)" title="Custom color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;flex:0 0 auto;">
-      <button onpointerdown="event.stopPropagation()" onclick="ebElField('${id}','headerBg','')" title="No background" style="background:rgba(255,255,255,0.7);border:1px solid var(--rule2);border-radius:4px;font-size:10px;cursor:pointer;color:var(--ink3);padding:0 5px;flex:0 0 auto;">∅</button>
-    </div>` : '';
+    <div style="flex:0 0 auto;padding:4px 8px;${el.headerBg ? `background:${el.headerBg};` : 'border-bottom:1px solid var(--rule);'}">
+      <div contenteditable="true" onblur="ebElText('${id}','header',this)" style="outline:none;font-weight:600;font-size:13px;text-align:${el.headerAlign || 'left'};color:${el.headerColor || (el.headerBg ? '#fff' : 'var(--ink)')};">${escapeHtml(ebT(el.header))}</div>
+    </div>
+    ${ebHeaderToolbar(el)}` : '';
   return `
     <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
       ${grip}${hBtn}${del}${resize}
@@ -2206,24 +2167,37 @@ function ebElEdit(el) {
   }
   // text / info
   const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  const alignIcon = (lines) => `<svg width="15" height="13" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
-  const alignBtn = (a, lines) => `<button onclick="ebElAlign('${id}','${a}')" class="btn btn-sm ${el.align === a ? '' : 'btn-ghost'}" title="Align ${a}" style="padding:0 6px;display:inline-flex;align-items:center;color:${el.align === a ? '#fff' : 'var(--ink2)'};">${alignIcon(lines)}</button>`;
-  const swatch = (val, css) => `<button onclick="ebElField('${id}','color','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(el.color || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;"></button>`;
-  const palette = [
+  const PALETTE = [
     ['var(--ink)', '#1a1610'], ['var(--red)', '#b83228'], ['var(--blue)', '#1a4a7a'],
     ['var(--green)', '#2a6b3c'], ['var(--amber)', '#b86c00'],
-  ].map(([v, css]) => swatch(v, css)).join('');
-  const fmt = `<div class="flex-gap" style="position:absolute;left:0;bottom:0;align-items:center;gap:3px;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;flex-wrap:wrap;max-width:100%;">
+  ];
+  const alignIcon = (lines) => `<svg width="15" height="13" viewBox="0 0 15 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${lines}</svg>`;
+  const L = { left: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>', center: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>', right: '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>' };
+  // align button bound to a given field ('align' for body, 'headerAlign' for header)
+  const alignBtnF = (field, a, cur) => `<button onclick="ebElField('${id}','${field}','${a}')" title="Align ${a}" class="btn btn-sm ${cur === a ? '' : 'btn-ghost'}" style="padding:0 6px;display:inline-flex;align-items:center;color:${cur === a ? '#fff' : 'var(--ink2)'};">${alignIcon(L[a])}</button>`;
+  // color swatch bound to a given field ('color' for body, 'headerColor' for header)
+  const swatchF = (field, val, css, cur) => `<button onclick="ebElField('${id}','${field}','${val}')" title="${val}" style="width:17px;height:17px;border-radius:50%;border:2px solid ${(cur || '') === val ? 'var(--ink)' : 'var(--paper)'};box-shadow:0 0 0 1px var(--rule2);background:${css};cursor:pointer;padding:0;"></button>`;
+  const paletteF = (field, cur) => PALETTE.map(([v, css]) => swatchF(field, v, css, cur)).join('');
+
+  const sep = '<span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>';
+
+  // Body row (always)
+  const bodyRow = `<div class="flex-gap" style="align-items:center;gap:3px;flex-wrap:wrap;max-width:100%;">
       <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
       <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
       <button onclick="ebElBold('${id}')" class="btn btn-sm ${el.bold ? '' : 'btn-ghost'}" style="padding:0 7px;font-weight:700;">B</button>
-      <span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>
-      ${alignBtn('left', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="2" y1="6.5" x2="9" y2="6.5"/><line x1="2" y1="10" x2="12" y2="10"/>')}
-      ${alignBtn('center', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="4" y1="6.5" x2="11" y2="6.5"/><line x1="3" y1="10" x2="12" y2="10"/>')}
-      ${alignBtn('right', '<line x1="2" y1="3" x2="13" y2="3"/><line x1="6" y1="6.5" x2="13" y2="6.5"/><line x1="3" y1="10" x2="13" y2="10"/>')}
-      <span style="width:1px;height:18px;background:var(--rule2);margin:0 2px;"></span>
-      ${palette}
-      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Custom color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
+      ${sep}
+      ${alignBtnF('align', 'left', el.align)}${alignBtnF('align', 'center', el.align)}${alignBtnF('align', 'right', el.align)}
+      ${sep}
+      ${paletteF('color', el.color)}
+      <input type="color" value="${el.color || '#3d3628'}" onchange="ebElField('${id}','color',this.value)" title="Custom text color" style="width:22px;height:18px;padding:0;border:none;background:none;cursor:pointer;">
+    </div>`;
+
+  // Header row (only when header is on) — align, text color, background
+  // Rendered separately in ebElBox so it works for ALL element types.
+
+  const fmt = `<div style="position:absolute;left:0;bottom:0;padding:3px 5px;background:var(--bg2);border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-top-right-radius:5px;max-width:100%;">
+      ${bodyRow}
     </div>`;
   return `<div style="position:relative;width:100%;height:100%;box-sizing:border-box;${callout}">
     ${ce('text', escapeHtml(ebT(el.text)), `width:100%;height:100%;box-sizing:border-box;padding:6px 8px;font-size:${el.size || 15}px;line-height:1.4;text-align:${el.align || 'left'};font-weight:${el.bold ? '700' : '400'};color:${el.color || 'var(--ink2)'};white-space:pre-wrap;overflow:auto;`)}
@@ -2369,13 +2343,6 @@ function ebPickElHtml(elId) {
   };
   inp.click();
 }
-function ebReqFromStart(id) {
-  const c = ebCardById(id); if (!c) return;
-  c.requires.conditions = [];
-  ebReqRefresh();
-}
-
-function ebCloseCardModal() { closeModal(); if (ebb.designId) ebDesignerRender(); else renderEbBuilder(); }
 
 async function ebSaveAll() {
   try {
