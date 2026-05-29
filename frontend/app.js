@@ -1299,7 +1299,26 @@ function ebExit() { ebb = null; goto('concepts'); }
 let ebPvState = null;
 
 function ebOpenPreview() {
-  showToast('Participant test view is being rebuilt for the new canvas cards (next pass).', 'info', 4000);
+  if (!ebb) return;
+  const cfg = JSON.parse(JSON.stringify(ebb.config));
+  const limit = ebb.concept.time_limit_seconds || 3600;
+  ebPvState = {
+    cfg, limit, timeLeft: limit, timer: null,
+    started: false, score: 0,
+    answeredCorrect: new Set(),  // question element ids answered correctly
+    pwOk: new Set(),             // password element ids entered correctly
+    enteredCodes: new Set(),     // codes registered (IB rounds + password fields)
+    readCards: new Set(),        // info-only cards acknowledged via "read"
+    ibSolved: new Set(),
+    ibArmed: new Set(),
+    openCards: new Set(),        // UI open/closed state
+    seen: new Set(),             // cards auto-opened once on reveal
+    doneSeen: new Set(),         // cards auto-closed once on completion
+  };
+  let ov = document.getElementById('eb-pv-overlay');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'eb-pv-overlay'; document.body.appendChild(ov); }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,22,16,0.6);display:flex;align-items:center;justify-content:center;padding:18px;';
+  ebPvRender();
 }
 
 function ebPvClose() {
@@ -1327,10 +1346,10 @@ function ebPvStart() {
 
 function ebPvHint() {
   const cost = (ebPvState.cfg.settings && ebPvState.cfg.settings.hint_cost) || 0;
-  showToast(`Hint sendes av gamemaster i selve eventet (bolk 2). Koster ${cost} poeng.`, 'info', 3500);
+  showToast(`Hints are sent by the gamemaster in the live event (block 2). Cost: ${cost} points.`, 'info', 3500);
 }
 
-/* ─── Motor: synlighet + fullført (fikspunkt) ───────────── */
+/* ─── Engine: visibility + completion (fixpoint) ────────── */
 function ebPvReqMet(card, done, codes) {
   const conds = (card.requires && card.requires.conditions) || [];
   if (conds.length === 0) return true;
@@ -1340,24 +1359,29 @@ function ebPvReqMet(card, done, codes) {
   return card.requires.mode === 'any' ? conds.some(test) : conds.every(test);
 }
 
+function ebPvCardComplete(card) {
+  const st = ebPvState;
+  if (card.surface === 'ib') return st.ibSolved.has(card.id);
+  const els = card.elements || [];
+  const qs = els.filter(e => e.type === 'question');
+  const pws = els.filter(e => e.type === 'password');
+  if (qs.length + pws.length > 0) {
+    return qs.every(e => st.answeredCorrect.has(e.id)) && pws.every(e => st.pwOk.has(e.id));
+  }
+  return st.readCards.has(card.id); // info-only card needs explicit "read"
+}
+
 function ebPvCompute() {
   const st = ebPvState;
   const cards = st.cfg.cards;
   const done = new Set();
-  cards.forEach(c => { if (c.surface === 'ib' && st.ibSolved.has(c.id)) done.add(c.id); });
-
   for (let iter = 0; iter <= cards.length + 1; iter++) {
     const visible = new Set();
     cards.forEach(c => { if (ebPvReqMet(c, done, st.enteredCodes)) visible.add(c.id); });
     let changed = false;
     cards.forEach(c => {
       if (done.has(c.id) || !visible.has(c.id)) return;
-      if (c.surface === 'ib') {
-        if (st.ibSolved.has(c.id)) { done.add(c.id); changed = true; }
-      } else {
-        const qs = (c.blocks || []).filter(b => b.type === 'question');
-        if (qs.every(b => st.answeredCorrect.has(b.id))) { done.add(c.id); changed = true; }
-      }
+      if (ebPvCardComplete(c)) { done.add(c.id); changed = true; }
     });
     if (!changed) break;
   }
@@ -1366,29 +1390,40 @@ function ebPvCompute() {
   return { visible, done };
 }
 
-/* ─── Handlinger ────────────────────────────────────────── */
-function ebPvAnswer(blockId, optIdx) {
-  const st = ebPvState;
-  if (st.answeredCorrect.has(blockId)) return;
-  let block = null;
-  st.cfg.cards.forEach(c => (c.blocks || []).forEach(b => { if (b.id === blockId) block = b; }));
-  if (!block) return;
-  const opt = (block.options || [])[optIdx];
-  if (opt && opt.correct) {
-    st.answeredCorrect.add(blockId);
-    st.score += block.points || 0;
-    ebPvRender();
-  } else {
-    showToast('Feil svar — prøv igjen', 'error');
-  }
+/* ─── Interaction ───────────────────────────────────────── */
+function ebPvFindEl(elId) {
+  let el = null;
+  ebPvState.cfg.cards.forEach(c => (c.elements || []).forEach(e => { if (e.id === elId) el = e; }));
+  return el;
 }
-
+function ebPvAnswer(elId, optIdx) {
+  const st = ebPvState;
+  if (st.answeredCorrect.has(elId)) return;
+  const el = ebPvFindEl(elId); if (!el) return;
+  const opt = (el.options || [])[optIdx];
+  if (opt && opt.correct) { st.answeredCorrect.add(elId); st.score += el.points || 0; ebPvRender(); }
+  else showToast('Wrong answer — try again', 'error');
+}
+function ebPvPassword(elId) {
+  const st = ebPvState;
+  const inp = document.getElementById('eb-pv-pw-' + elId);
+  const el = ebPvFindEl(elId);
+  if (!inp || !el) return;
+  if (el.code && inp.value.trim().toUpperCase() === String(el.code).toUpperCase()) {
+    st.pwOk.add(elId); st.score += el.points || 0; st.enteredCodes.add(String(el.code).toUpperCase());
+    showToast('Correct code', 'success'); ebPvRender();
+  } else showToast('Wrong code — try again', 'error');
+}
+function ebPvRead(cardId) { ebPvState.readCards.add(cardId); ebPvRender(); }
+function ebPvToggle(cardId) {
+  const o = ebPvState.openCards;
+  if (o.has(cardId)) o.delete(cardId); else o.add(cardId);
+  ebPvRender();
+}
 function ebPvIbArm(ibId) { ebPvState.ibArmed.add(ibId); ebPvRender(); }
-
 function ebPvIbSubmit(ibId) {
   const st = ebPvState;
-  const card = st.cfg.cards.find(c => c.id === ibId);
-  if (!card) return;
+  const card = st.cfg.cards.find(c => c.id === ibId); if (!card) return;
   const ib = card.ib || {};
   const n = ib.place_count || (ib.correct_codes || []).length || 0;
   const entered = [];
@@ -1397,18 +1432,16 @@ function ebPvIbSubmit(ibId) {
     if (el && el.value.trim()) entered.push(el.value.trim().toUpperCase());
   }
   const correct = (ib.correct_codes || []).map(c => c.toUpperCase());
-  const setsEqual = entered.length === correct.length &&
-    correct.every(c => entered.includes(c)) && entered.every(c => correct.includes(c));
-
-  if (setsEqual) {
+  const ok = entered.length === correct.length && correct.every(c => entered.includes(c)) && entered.every(c => correct.includes(c));
+  if (ok) {
     st.ibSolved.add(ibId);
     st.score += ib.points_correct || 0;
     correct.forEach(c => st.enteredCodes.add(c));
-    showToast(ib.success_text ? ib.success_text : 'Riktig plassering!', 'success', 3500);
+    showToast(ib.success_text ? ib.success_text : 'Correct placement!', 'success', 3500);
     ebPvRender();
   } else {
     st.score -= ib.points_wrong || 0;
-    showToast('Feil plassering — prøv igjen', 'error');
+    showToast('Wrong placement — try again', 'error');
     ebPvRender();
   }
 }
@@ -1428,12 +1461,15 @@ function ebPvRender() {
     inner = ebPvIntro();
   } else {
     const { visible, done } = ebPvCompute();
+    // auto-open newly revealed cards; auto-close on completion (once each)
+    cfg.cards.forEach(c => { if (visible.has(c.id) && !st.seen.has(c.id)) { st.seen.add(c.id); st.openCards.add(c.id); } });
+    cfg.cards.forEach(c => { if (done.has(c.id) && !st.doneSeen.has(c.id)) { st.doneSeen.add(c.id); st.openCards.delete(c.id); } });
     inner = `
       <div style="flex:1;display:flex;min-height:0;">
         <div style="flex:0 0 320px;border-right:1px solid var(--rule);overflow:auto;padding:18px;background:var(--bg2);">
           ${ebPvIbColumn(visible, done)}
         </div>
-        <div style="flex:1;overflow:auto;padding:22px 26px;">
+        <div style="flex:1;overflow:auto;padding:18px 20px;">
           ${ebPvWorkArea(visible, done)}
         </div>
       </div>`;
@@ -1441,21 +1477,21 @@ function ebPvRender() {
 
   const topbar = `
     <div style="flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--paper);border-bottom:1px solid var(--rule);">
-      <span class="badge blue">LAG 1</span>
-      <span style="font-family:var(--font-cond);font-size:18px;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink);">Testlag</span>
+      <span class="badge blue">TEAM 1</span>
+      <span style="font-family:var(--font-cond);font-size:18px;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink);">Test team</span>
       <span style="flex:1;"></span>
       <button class="btn btn-sm btn-secondary" onclick="ebPvHint()">Hint ${hintCost ? `(−${hintCost} p)` : ''}</button>
     </div>`;
 
   const bottombar = `
     <div style="flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--paper);border-top:1px solid var(--rule);">
-      ${showScore ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Poeng</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--ink);" id="eb-pv-score">${st.score}</span>` : ''}
+      ${showScore ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Score</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--ink);">${st.score}</span>` : ''}
       <span style="flex:1;"></span>
-      ${showTimer ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Tid igjen</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--stamp);" id="eb-pv-time">${ebPvFmt(st.timeLeft)}</span>` : ''}
+      ${showTimer ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Time left</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--stamp);" id="eb-pv-time">${ebPvFmt(st.timeLeft)}</span>` : ''}
     </div>`;
 
   ov.innerHTML = `
-    <button onclick="ebPvClose()" title="Lukk" style="position:absolute;top:14px;right:18px;background:none;border:none;color:var(--paper);font-size:26px;cursor:pointer;">✕</button>
+    <button onclick="ebPvClose()" title="Close" style="position:absolute;top:14px;right:18px;background:none;border:none;color:var(--paper);font-size:26px;cursor:pointer;">✕</button>
     <div style="width:min(1180px,96vw);aspect-ratio:4/3;max-height:92vh;background:var(--ink2);border-radius:28px;padding:16px;box-shadow:0 30px 80px rgba(0,0,0,0.5);display:flex;flex-direction:column;">
       <div style="flex:1;display:flex;flex-direction:column;background:var(--bg);border-radius:14px;overflow:hidden;color:var(--ink);font-family:var(--font-serif);">
         ${topbar}
@@ -1463,21 +1499,23 @@ function ebPvRender() {
         ${st.started ? bottombar : ''}
       </div>
     </div>`;
+
+  if (st.started) requestAnimationFrame(ebPvScaleCanvases);
 }
 
 function ebPvIntro() {
   const cfg = ebPvState.cfg;
   if (cfg.cards.length === 0) {
-    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--ink3);padding:40px;text-align:center;">Ingen kort bygget ennå. Legg til kort i «Kort &amp; flyt» først.</div>`;
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--ink3);padding:40px;text-align:center;">No cards yet. Add cards in “Cards &amp; flow” first.</div>`;
   }
   return `
     <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:40px;">
       <div style="max-width:620px;text-align:center;">
         <div class="page-eyebrow">${escapeHtml(ebb.concept.name)}</div>
-        <h1 style="font-family:var(--font-serif);font-size:30px;margin:12px 0;color:var(--ink);">${escapeHtml(cfg.intro.title || 'Velkommen')}</h1>
+        <h1 style="font-family:var(--font-serif);font-size:30px;margin:12px 0;color:var(--ink);">${escapeHtml(cfg.intro.title || 'Welcome')}</h1>
         ${cfg.intro.media_url ? `<img src="${escapeHtml(cfg.intro.media_url)}" style="max-width:100%;max-height:220px;border-radius:8px;margin:14px 0;border:1px solid var(--rule);">` : ''}
         <p style="color:var(--ink2);line-height:1.7;white-space:pre-wrap;">${escapeHtml(cfg.intro.body || '')}</p>
-        <button class="btn" style="margin-top:22px;" onclick="ebPvStart()">▶ Start oppdraget</button>
+        <button class="btn" style="margin-top:22px;" onclick="ebPvStart()">▶ Start mission</button>
       </div>
     </div>`;
 }
@@ -1489,9 +1527,8 @@ function ebPvIbColumn(visible, done) {
     .sort((a, b) => a.track - b.track || a.order - b.order)[0];
 
   const head = `<div class="page-eyebrow" style="margin-bottom:12px;">Investigation Board</div>`;
-
   if (!ibCard) {
-    return `${head}<div class="muted" style="font-size:13px;">Ingen aktiv runde akkurat nå. Løs kortene i arbeidsområdet for å låse opp neste runde.</div>`;
+    return `${head}<div class="muted" style="font-size:13px;">No active round right now. Solve the cards in the work area to unlock the next round.</div>`;
   }
 
   const ib = ibCard.ib || {};
@@ -1501,31 +1538,31 @@ function ebPvIbColumn(visible, done) {
 
   const activeList = active.length
     ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px;">${active.map(c => `<span class="badge dark col-mono">${escapeHtml(c)}</span>`).join('')}</div>`
-    : `<div class="muted" style="font-size:12px;margin:8px 0 14px;">(ingen aktive koder definert)</div>`;
+    : `<div class="muted" style="font-size:12px;margin:8px 0 14px;">(no active codes defined)</div>`;
 
   let action;
   if (!armed) {
     action = `
-      <div class="muted" style="font-size:12px;margin-bottom:6px;">Du skal plassere <strong>${n}</strong> av kortene på Investigation Board.</div>
-      <button class="btn btn-sm" onclick="ebPvIbArm('${ibCard.id}')">Plasser på Investigation Board</button>`;
+      <div class="muted" style="font-size:12px;margin-bottom:6px;">Place <strong>${n}</strong> of the cards on the Investigation Board.</div>
+      <button class="btn btn-sm" onclick="ebPvIbArm('${ibCard.id}')">Place on Investigation Board</button>`;
   } else {
     let slots = '';
     for (let i = 0; i < n; i++) {
-      slots += `<input id="eb-pv-ibslot-${ibCard.id}-${i}" type="text" maxlength="6" placeholder="Kode ${i + 1}" class="col-mono" style="width:100%;margin-bottom:8px;text-transform:uppercase;">`;
+      slots += `<input id="eb-pv-ibslot-${ibCard.id}-${i}" type="text" maxlength="6" placeholder="Code ${i + 1}" class="col-mono" style="width:100%;margin-bottom:8px;text-transform:uppercase;">`;
     }
     action = `
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Tast koden på de <strong>${n}</strong> kortene du plasserer. Resten legges til side (discard).</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Enter the code on the <strong>${n}</strong> cards you place. The rest go to the discard pile.</div>
       ${slots}
-      <button class="btn btn-sm" onclick="ebPvIbSubmit('${ibCard.id}')">Bekreft plassering</button>`;
+      <button class="btn btn-sm" onclick="ebPvIbSubmit('${ibCard.id}')">Confirm placement</button>`;
   }
 
   return `
     ${head}
     <div class="panel" style="margin:0;">
-      <div class="panel-header" style="font-size:13px;">${escapeHtml(ibCard.title || 'IB-runde')}</div>
+      <div class="panel-header" style="font-size:13px;">${escapeHtml(ebT(ibCard.title) || 'IB round')}</div>
       <div class="panel-body">
         ${ib.intro_text ? `<p style="font-size:13px;color:var(--ink2);line-height:1.6;margin-top:0;">${escapeHtml(ib.intro_text)}</p>` : ''}
-        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--ink3);">Aktive kort</div>
+        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--ink3);">Active cards</div>
         ${activeList}
         ${action}
       </div>
@@ -1539,66 +1576,106 @@ function ebPvWorkArea(visible, done) {
     .sort((a, b) => a.track - b.track || a.order - b.order);
 
   if (cards.length === 0) {
-    return `<div class="muted" style="padding:30px;text-align:center;">Ingen aktive bolker ennå.</div>`;
+    return `<div class="muted" style="padding:30px;text-align:center;">No active cards yet.</div>`;
   }
-
   const allDone = st.cfg.cards.every(c => done.has(c.id));
   const cardsHtml = cards.map(c => ebPvWorkCard(c, done)).join('');
   const finale = allDone
-    ? `<div class="panel" style="border-color:var(--green);"><div class="panel-body" style="text-align:center;"><div style="font-size:34px;color:var(--green);">✓</div><h2 style="font-family:var(--font-serif);margin:6px 0;">Alle kort fullført</h2><p class="muted" style="font-size:13px;">Finalen (lagnummer, navn, portrett og bolig) bygges i bolk 3.</p><button class="btn btn-sm btn-secondary" onclick="ebPvReplay()">↺ Spill på nytt</button></div></div>`
+    ? `<div class="panel" style="border-color:var(--green);"><div class="panel-body" style="text-align:center;"><div style="font-size:34px;color:var(--green);">✓</div><h2 style="font-family:var(--font-serif);margin:6px 0;">All cards completed</h2><p class="muted" style="font-size:13px;">The finale (team number, name, portrait and residence) is built in block 3.</p><button class="btn btn-sm btn-secondary" onclick="ebPvReplay()">↺ Play again</button></div></div>`
     : '';
-
   return cardsHtml + finale;
 }
 
 function ebPvWorkCard(card, done) {
   const st = ebPvState;
   const isDone = done.has(card.id);
-  const blocks = (card.blocks || []).map(b => ebPvBlock(b)).join('');
+  const open = st.openCards.has(card.id);
+  const head = `
+    <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
+      <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.05em;font-size:15px;flex:1;">${escapeHtml(ebT(card.title) || 'Card')}</span>
+      ${card.code ? `<span class="col-mono" style="font-size:11px;opacity:0.85;">${escapeHtml(card.code)}</span>` : ''}
+      ${isDone ? '<span>✓</span>' : ''}
+      <span style="opacity:0.85;">${open ? '▾' : '▸'}</span>
+    </div>`;
+  let body = '';
+  if (open) {
+    const completable = (card.elements || []).some(e => e.type === 'question' || e.type === 'password');
+    const readBtn = (!completable && !isDone)
+      ? `<div style="padding:10px 14px;text-align:right;border-top:1px solid var(--rule);"><button class="btn btn-sm" onclick="ebPvRead('${card.id}')">Mark as read</button></div>`
+      : '';
+    body = `<div style="border:1px solid var(--rule);border-top:none;border-radius:0 0 8px 8px;background:var(--paper);">
+      ${ebPvCanvasHtml(card)}
+      ${readBtn}
+    </div>`;
+  }
+  return `<div style="margin-bottom:14px;">${head}${body}</div>`;
+}
+
+function ebPvCanvasHtml(card) {
+  const cw = (card.canvas && card.canvas.w) || 700;
+  const ch = (card.canvas && card.canvas.h) || 460;
   return `
-    <div class="panel">
-      <div class="panel-header" style="font-size:14px;">
-        ${escapeHtml(card.title || 'Bolk')}
-        ${card.code ? `<span class="badge dark col-mono" style="margin-left:8px;font-size:10px;">${escapeHtml(card.code)}</span>` : ''}
-        <span class="ph-spacer"></span>
-        ${isDone ? '<span class="badge green">Fullført</span>' : ''}
+    <div class="eb-pv-cwrap" style="position:relative;width:100%;overflow:hidden;">
+      <div class="eb-pv-canvas" data-cw="${cw}" data-ch="${ch}" style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform-origin:top left;">
+        ${(card.elements || []).map(el => ebPvEl(el)).join('')}
       </div>
-      <div class="panel-body">${blocks || '<div class="muted" style="font-size:13px;">(ingen innhold)</div>'}</div>
     </div>`;
 }
 
-function ebPvBlock(b) {
-  const st = ebPvState;
-  if (b.type === 'info') {
-    return `
-      ${b.media_url ? `<img src="${escapeHtml(b.media_url)}" style="max-width:100%;max-height:240px;border-radius:6px;border:1px solid var(--rule);margin-bottom:10px;">` : ''}
-      <p style="color:var(--ink2);line-height:1.7;white-space:pre-wrap;margin:0 0 6px;">${escapeHtml(b.text || '')}</p>`;
-  }
-  if (b.type === 'unlock') {
-    const codes = (b.physical_codes || []).map(c => `<span class="badge amber col-mono">${escapeHtml(c)}</span>`).join(' ');
-    return `
-      <div style="background:var(--amber-bg);border:1px solid var(--amber);border-radius:8px;padding:12px 14px;margin:6px 0;">
-        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--amber);margin-bottom:6px;">Åpne fysiske kort</div>
-        ${b.text ? `<div style="color:var(--ink2);margin-bottom:8px;">${escapeHtml(b.text)}</div>` : ''}
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">${codes || '<span class="muted">(ingen koder)</span>'}</div>
-      </div>`;
-  }
-  if (b.type === 'question') {
-    const answered = st.answeredCorrect.has(b.id);
-    const opts = (b.options || []).map((o, i) => {
-      if (answered) {
-        return `<div style="padding:9px 12px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:8px;margin-bottom:6px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(o.text || '')}</div>`;
-      }
-      return `<button onclick="ebPvAnswer('${b.id}', ${i})" style="display:block;width:100%;text-align:left;padding:9px 12px;border:1px solid var(--rule2);border-radius:8px;margin-bottom:6px;background:var(--paper);color:var(--ink);cursor:pointer;font-family:var(--font-serif);">${escapeHtml(o.text || '')}</button>`;
-    }).join('');
-    return `
-      <div style="margin:4px 0 10px;">
-        <div style="font-weight:600;margin-bottom:8px;color:var(--ink);">${escapeHtml(b.prompt || '')}${b.points ? ` <span class="muted" style="font-weight:400;font-size:12px;">(${b.points} p)</span>` : ''}</div>
-        ${opts}
-      </div>`;
-  }
-  return '';
+function ebPvScaleCanvases() {
+  document.querySelectorAll('#eb-pv-overlay .eb-pv-cwrap').forEach(wrap => {
+    const canvas = wrap.querySelector('.eb-pv-canvas');
+    if (!canvas) return;
+    const cw = parseFloat(canvas.dataset.cw), ch = parseFloat(canvas.dataset.ch);
+    const W = wrap.clientWidth;
+    if (!W || !cw) return;
+    const s = W / cw;
+    canvas.style.transform = `scale(${s})`;
+    wrap.style.height = (ch * s) + 'px';
+  });
 }
+
+function ebPvEl(el) {
+  const st = ebPvState;
+  const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
+  if (el.type === 'image') {
+    return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:contain;">` : ''}</div>`;
+  }
+  if (el.type === 'link') {
+    return `<div style="${pos}padding:4px 6px;display:flex;align-items:center;"><a href="${escapeHtml(el.url)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:14px;">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</a></div>`;
+  }
+  if (el.type === 'unlock') {
+    const codes = (el.codes || []).map(c => `<span class="badge amber col-mono">${escapeHtml(c)}</span>`).join(' ');
+    return `<div style="${pos}padding:8px 10px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:6px;">
+      <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:10px;letter-spacing:0.1em;color:var(--amber);margin-bottom:5px;">Open physical cards</div>
+      ${el.label && ebT(el.label) ? `<div style="font-size:12px;color:var(--ink2);margin-bottom:6px;">${escapeHtml(ebT(el.label))}</div>` : ''}
+      <div style="display:flex;flex-wrap:wrap;gap:5px;">${codes || '<span class="muted" style="font-size:12px;">(no codes)</span>'}</div>
+    </div>`;
+  }
+  if (el.type === 'question') {
+    const answered = st.answeredCorrect.has(el.id);
+    const opts = (el.options || []).map((o, i) => answered
+      ? `<div style="padding:6px 8px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:6px;margin-bottom:4px;font-size:13px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(ebT(o.text))}</div>`
+      : `<button onclick="ebPvAnswer('${el.id}',${i})" style="display:block;width:100%;text-align:left;padding:6px 8px;border:1px solid var(--rule2);border-radius:6px;margin-bottom:4px;background:var(--paper);color:var(--ink);cursor:pointer;font-size:13px;font-family:var(--font-serif);">${escapeHtml(ebT(o.text))}</button>`
+    ).join('');
+    return `<div style="${pos}padding:6px 8px;overflow:auto;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:6px;color:var(--ink);">${escapeHtml(ebT(el.prompt) || 'Question')}${el.points ? ` <span class="muted" style="font-weight:400;font-size:11px;">(${el.points} p)</span>` : ''}</div>
+      ${opts}
+    </div>`;
+  }
+  if (el.type === 'password') {
+    const ok = st.pwOk.has(el.id);
+    const inner = ok
+      ? `<div style="color:var(--green);font-weight:600;font-size:13px;">✓ ${escapeHtml(ebT(el.label) || 'Unlocked')}</div>`
+      : `<div style="font-size:13px;margin-bottom:6px;">${escapeHtml(ebT(el.label) || 'Enter code')}${el.points ? ` <span class="muted" style="font-size:11px;">(${el.points} p)</span>` : ''}</div>
+         <div style="display:flex;gap:6px;"><input id="eb-pv-pw-${el.id}" class="col-mono" maxlength="6" style="flex:1;text-transform:uppercase;" placeholder="ABCD"><button class="btn btn-sm" onclick="ebPvPassword('${el.id}')">OK</button></div>`;
+    return `<div style="${pos}padding:6px 8px;">${inner}</div>`;
+  }
+  // text / info
+  const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);border-radius:4px;' : '';
+  return `<div style="${pos}padding:6px 8px;${callout}"><div style="font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);line-height:1.5;white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div></div>`;
+}
+
 
 function ebCardsTab() {
   const c = ebb.config;
@@ -1661,7 +1738,7 @@ function ebTileHtml(card) {
     ? '<span class="badge green">Fra start</span>' : '';
   const reqs = ebRequiresSummary(card);
   const trig = ebTriggersSummary(card);
-  const count = isIb ? '' : `<span class="muted" style="font-size:11px;">${(card.blocks || []).length} blokk(er)</span>`;
+  const count = isIb ? '' : `<span class="muted" style="font-size:11px;">${(card.elements || []).length} element(s)</span>`;
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
          style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
