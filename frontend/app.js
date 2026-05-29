@@ -1252,8 +1252,330 @@ function renderEbBuilder() {
 function ebSetTab(t) { ebb.tab = t; renderEbBuilder(); }
 function ebExit() { ebb = null; goto('concepts'); }
 
+/* ════════════════════════════════════════════════════════
+   DEL B — DELTAGER-TEST (samme papir/dossier-stil som siden)
+   ────────────────────────────────────────────────────────
+   Spiller kort-grafen klient-side i en liggende nettbrett-ramme.
+   Visning av et kort styres av requires (card_done / code).
+   IB-kort rendres i IB-kolonnen, arbeidskort i arbeidsområdet.
+   Samme flyt-motor gjenbrukes senere i play.html (med backend).
+   ──────────────────────────────────────────────────────── */
+let ebPvState = null;
+
 function ebOpenPreview() {
-  showToast('Test-visningen bygges om mot kort-modellen i Del B', 'info', 3500);
+  if (!ebb) return;
+  const cfg = JSON.parse(JSON.stringify(ebb.config));
+  const limit = ebb.concept.time_limit_seconds || 3600;
+  ebPvState = {
+    cfg, limit, timeLeft: limit, timer: null,
+    started: false, score: 0,
+    answeredCorrect: new Set(),
+    enteredCodes: new Set(),
+    ibSolved: new Set(),
+    ibArmed: new Set(),
+  };
+  let ov = document.getElementById('eb-pv-overlay');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'eb-pv-overlay'; document.body.appendChild(ov); }
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,22,16,0.6);display:flex;align-items:center;justify-content:center;padding:18px;';
+  ebPvRender();
+}
+
+function ebPvClose() {
+  if (ebPvState && ebPvState.timer) clearInterval(ebPvState.timer);
+  const ov = document.getElementById('eb-pv-overlay');
+  if (ov) ov.remove();
+  ebPvState = null;
+}
+function ebPvReplay() { ebOpenPreview(); }
+function ebPvFmt(s) { s = Math.max(0, Math.floor(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+
+function ebPvStart() {
+  ebPvState.started = true;
+  if (!ebPvState.timer) {
+    ebPvState.timer = setInterval(() => {
+      if (!ebPvState) return;
+      ebPvState.timeLeft -= 1;
+      const el = document.getElementById('eb-pv-time');
+      if (el) el.textContent = ebPvFmt(ebPvState.timeLeft);
+      if (ebPvState.timeLeft <= 0) { clearInterval(ebPvState.timer); ebPvState.timer = null; }
+    }, 1000);
+  }
+  ebPvRender();
+}
+
+function ebPvHint() {
+  const cost = (ebPvState.cfg.settings && ebPvState.cfg.settings.hint_cost) || 0;
+  showToast(`Hint sendes av gamemaster i selve eventet (bolk 2). Koster ${cost} poeng.`, 'info', 3500);
+}
+
+/* ─── Motor: synlighet + fullført (fikspunkt) ───────────── */
+function ebPvReqMet(card, done, codes) {
+  const conds = (card.requires && card.requires.conditions) || [];
+  if (conds.length === 0) return true;
+  const test = (c) => c.type === 'card_done'
+    ? done.has(c.card_id)
+    : (c.type === 'code' ? codes.has(String(c.code || '').toUpperCase()) : false);
+  return card.requires.mode === 'any' ? conds.some(test) : conds.every(test);
+}
+
+function ebPvCompute() {
+  const st = ebPvState;
+  const cards = st.cfg.cards;
+  const done = new Set();
+  cards.forEach(c => { if (c.surface === 'ib' && st.ibSolved.has(c.id)) done.add(c.id); });
+
+  for (let iter = 0; iter <= cards.length + 1; iter++) {
+    const visible = new Set();
+    cards.forEach(c => { if (ebPvReqMet(c, done, st.enteredCodes)) visible.add(c.id); });
+    let changed = false;
+    cards.forEach(c => {
+      if (done.has(c.id) || !visible.has(c.id)) return;
+      if (c.surface === 'ib') {
+        if (st.ibSolved.has(c.id)) { done.add(c.id); changed = true; }
+      } else {
+        const qs = (c.blocks || []).filter(b => b.type === 'question');
+        if (qs.every(b => st.answeredCorrect.has(b.id))) { done.add(c.id); changed = true; }
+      }
+    });
+    if (!changed) break;
+  }
+  const visible = new Set();
+  cards.forEach(c => { if (ebPvReqMet(c, done, st.enteredCodes)) visible.add(c.id); });
+  return { visible, done };
+}
+
+/* ─── Handlinger ────────────────────────────────────────── */
+function ebPvAnswer(blockId, optIdx) {
+  const st = ebPvState;
+  if (st.answeredCorrect.has(blockId)) return;
+  let block = null;
+  st.cfg.cards.forEach(c => (c.blocks || []).forEach(b => { if (b.id === blockId) block = b; }));
+  if (!block) return;
+  const opt = (block.options || [])[optIdx];
+  if (opt && opt.correct) {
+    st.answeredCorrect.add(blockId);
+    st.score += block.points || 0;
+    ebPvRender();
+  } else {
+    showToast('Feil svar — prøv igjen', 'error');
+  }
+}
+
+function ebPvIbArm(ibId) { ebPvState.ibArmed.add(ibId); ebPvRender(); }
+
+function ebPvIbSubmit(ibId) {
+  const st = ebPvState;
+  const card = st.cfg.cards.find(c => c.id === ibId);
+  if (!card) return;
+  const ib = card.ib || {};
+  const n = ib.place_count || (ib.correct_codes || []).length || 0;
+  const entered = [];
+  for (let i = 0; i < n; i++) {
+    const el = document.getElementById(`eb-pv-ibslot-${ibId}-${i}`);
+    if (el && el.value.trim()) entered.push(el.value.trim().toUpperCase());
+  }
+  const correct = (ib.correct_codes || []).map(c => c.toUpperCase());
+  const setsEqual = entered.length === correct.length &&
+    correct.every(c => entered.includes(c)) && entered.every(c => correct.includes(c));
+
+  if (setsEqual) {
+    st.ibSolved.add(ibId);
+    st.score += ib.points_correct || 0;
+    correct.forEach(c => st.enteredCodes.add(c));
+    showToast(ib.success_text ? ib.success_text : 'Riktig plassering!', 'success', 3500);
+    ebPvRender();
+  } else {
+    st.score -= ib.points_wrong || 0;
+    showToast('Feil plassering — prøv igjen', 'error');
+    ebPvRender();
+  }
+}
+
+/* ─── Render ────────────────────────────────────────────── */
+function ebPvRender() {
+  const ov = document.getElementById('eb-pv-overlay');
+  const st = ebPvState;
+  if (!ov || !st) return;
+  const cfg = st.cfg;
+  const showScore = !cfg.settings || cfg.settings.show_score !== false;
+  const showTimer = !cfg.settings || cfg.settings.time_limit_enabled !== false;
+  const hintCost = (cfg.settings && cfg.settings.hint_cost) || 0;
+
+  let inner;
+  if (!st.started) {
+    inner = ebPvIntro();
+  } else {
+    const { visible, done } = ebPvCompute();
+    inner = `
+      <div style="flex:1;display:flex;min-height:0;">
+        <div style="flex:0 0 320px;border-right:1px solid var(--rule);overflow:auto;padding:18px;background:var(--bg2);">
+          ${ebPvIbColumn(visible, done)}
+        </div>
+        <div style="flex:1;overflow:auto;padding:22px 26px;">
+          ${ebPvWorkArea(visible, done)}
+        </div>
+      </div>`;
+  }
+
+  const topbar = `
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--paper);border-bottom:1px solid var(--rule);">
+      <span class="badge blue">LAG 1</span>
+      <span style="font-family:var(--font-cond);font-size:18px;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink);">Testlag</span>
+      <span style="flex:1;"></span>
+      <button class="btn btn-sm btn-secondary" onclick="ebPvHint()">Hint ${hintCost ? `(−${hintCost} p)` : ''}</button>
+    </div>`;
+
+  const bottombar = `
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--paper);border-top:1px solid var(--rule);">
+      ${showScore ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Poeng</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--ink);" id="eb-pv-score">${st.score}</span>` : ''}
+      <span style="flex:1;"></span>
+      ${showTimer ? `<span style="font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.1em;color:var(--ink3);">Tid igjen</span><span style="font-family:var(--font-mono);font-size:18px;color:var(--stamp);" id="eb-pv-time">${ebPvFmt(st.timeLeft)}</span>` : ''}
+    </div>`;
+
+  ov.innerHTML = `
+    <button onclick="ebPvClose()" title="Lukk" style="position:absolute;top:14px;right:18px;background:none;border:none;color:var(--paper);font-size:26px;cursor:pointer;">✕</button>
+    <div style="width:min(1180px,96vw);aspect-ratio:4/3;max-height:92vh;background:var(--ink2);border-radius:28px;padding:16px;box-shadow:0 30px 80px rgba(0,0,0,0.5);display:flex;flex-direction:column;">
+      <div style="flex:1;display:flex;flex-direction:column;background:var(--bg);border-radius:14px;overflow:hidden;color:var(--ink);font-family:var(--font-serif);">
+        ${topbar}
+        ${inner}
+        ${st.started ? bottombar : ''}
+      </div>
+    </div>`;
+}
+
+function ebPvIntro() {
+  const cfg = ebPvState.cfg;
+  if (cfg.cards.length === 0) {
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--ink3);padding:40px;text-align:center;">Ingen kort bygget ennå. Legg til kort i «Kort &amp; flyt» først.</div>`;
+  }
+  return `
+    <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:40px;">
+      <div style="max-width:620px;text-align:center;">
+        <div class="page-eyebrow">${escapeHtml(ebb.concept.name)}</div>
+        <h1 style="font-family:var(--font-serif);font-size:30px;margin:12px 0;color:var(--ink);">${escapeHtml(cfg.intro.title || 'Velkommen')}</h1>
+        ${cfg.intro.media_url ? `<img src="${escapeHtml(cfg.intro.media_url)}" style="max-width:100%;max-height:220px;border-radius:8px;margin:14px 0;border:1px solid var(--rule);">` : ''}
+        <p style="color:var(--ink2);line-height:1.7;white-space:pre-wrap;">${escapeHtml(cfg.intro.body || '')}</p>
+        <button class="btn" style="margin-top:22px;" onclick="ebPvStart()">▶ Start oppdraget</button>
+      </div>
+    </div>`;
+}
+
+function ebPvIbColumn(visible, done) {
+  const st = ebPvState;
+  const ibCard = st.cfg.cards
+    .filter(c => c.surface === 'ib' && visible.has(c.id) && !done.has(c.id))
+    .sort((a, b) => a.track - b.track || a.order - b.order)[0];
+
+  const head = `<div class="page-eyebrow" style="margin-bottom:12px;">Investigation Board</div>`;
+
+  if (!ibCard) {
+    return `${head}<div class="muted" style="font-size:13px;">Ingen aktiv runde akkurat nå. Løs kortene i arbeidsområdet for å låse opp neste runde.</div>`;
+  }
+
+  const ib = ibCard.ib || {};
+  const active = (ib.active_codes || []);
+  const n = ib.place_count || (ib.correct_codes || []).length || 0;
+  const armed = st.ibArmed.has(ibCard.id);
+
+  const activeList = active.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px;">${active.map(c => `<span class="badge dark col-mono">${escapeHtml(c)}</span>`).join('')}</div>`
+    : `<div class="muted" style="font-size:12px;margin:8px 0 14px;">(ingen aktive koder definert)</div>`;
+
+  let action;
+  if (!armed) {
+    action = `
+      <div class="muted" style="font-size:12px;margin-bottom:6px;">Du skal plassere <strong>${n}</strong> av kortene på Investigation Board.</div>
+      <button class="btn btn-sm" onclick="ebPvIbArm('${ibCard.id}')">Plasser på Investigation Board</button>`;
+  } else {
+    let slots = '';
+    for (let i = 0; i < n; i++) {
+      slots += `<input id="eb-pv-ibslot-${ibCard.id}-${i}" type="text" maxlength="6" placeholder="Kode ${i + 1}" class="col-mono" style="width:100%;margin-bottom:8px;text-transform:uppercase;">`;
+    }
+    action = `
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Tast koden på de <strong>${n}</strong> kortene du plasserer. Resten legges til side (discard).</div>
+      ${slots}
+      <button class="btn btn-sm" onclick="ebPvIbSubmit('${ibCard.id}')">Bekreft plassering</button>`;
+  }
+
+  return `
+    ${head}
+    <div class="panel" style="margin:0;">
+      <div class="panel-header" style="font-size:13px;">${escapeHtml(ibCard.title || 'IB-runde')}</div>
+      <div class="panel-body">
+        ${ib.intro_text ? `<p style="font-size:13px;color:var(--ink2);line-height:1.6;margin-top:0;">${escapeHtml(ib.intro_text)}</p>` : ''}
+        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--ink3);">Aktive kort</div>
+        ${activeList}
+        ${action}
+      </div>
+    </div>`;
+}
+
+function ebPvWorkArea(visible, done) {
+  const st = ebPvState;
+  const cards = st.cfg.cards
+    .filter(c => c.surface !== 'ib' && visible.has(c.id))
+    .sort((a, b) => a.track - b.track || a.order - b.order);
+
+  if (cards.length === 0) {
+    return `<div class="muted" style="padding:30px;text-align:center;">Ingen aktive bolker ennå.</div>`;
+  }
+
+  const allDone = st.cfg.cards.every(c => done.has(c.id));
+  const cardsHtml = cards.map(c => ebPvWorkCard(c, done)).join('');
+  const finale = allDone
+    ? `<div class="panel" style="border-color:var(--green);"><div class="panel-body" style="text-align:center;"><div style="font-size:34px;color:var(--green);">✓</div><h2 style="font-family:var(--font-serif);margin:6px 0;">Alle kort fullført</h2><p class="muted" style="font-size:13px;">Finalen (lagnummer, navn, portrett og bolig) bygges i bolk 3.</p><button class="btn btn-sm btn-secondary" onclick="ebPvReplay()">↺ Spill på nytt</button></div></div>`
+    : '';
+
+  return cardsHtml + finale;
+}
+
+function ebPvWorkCard(card, done) {
+  const st = ebPvState;
+  const isDone = done.has(card.id);
+  const blocks = (card.blocks || []).map(b => ebPvBlock(b)).join('');
+  return `
+    <div class="panel">
+      <div class="panel-header" style="font-size:14px;">
+        ${escapeHtml(card.title || 'Bolk')}
+        ${card.code ? `<span class="badge dark col-mono" style="margin-left:8px;font-size:10px;">${escapeHtml(card.code)}</span>` : ''}
+        <span class="ph-spacer"></span>
+        ${isDone ? '<span class="badge green">Fullført</span>' : ''}
+      </div>
+      <div class="panel-body">${blocks || '<div class="muted" style="font-size:13px;">(ingen innhold)</div>'}</div>
+    </div>`;
+}
+
+function ebPvBlock(b) {
+  const st = ebPvState;
+  if (b.type === 'info') {
+    return `
+      ${b.media_url ? `<img src="${escapeHtml(b.media_url)}" style="max-width:100%;max-height:240px;border-radius:6px;border:1px solid var(--rule);margin-bottom:10px;">` : ''}
+      <p style="color:var(--ink2);line-height:1.7;white-space:pre-wrap;margin:0 0 6px;">${escapeHtml(b.text || '')}</p>`;
+  }
+  if (b.type === 'unlock') {
+    const codes = (b.physical_codes || []).map(c => `<span class="badge amber col-mono">${escapeHtml(c)}</span>`).join(' ');
+    return `
+      <div style="background:var(--amber-bg);border:1px solid var(--amber);border-radius:8px;padding:12px 14px;margin:6px 0;">
+        <div style="font-family:var(--font-cond);text-transform:uppercase;font-size:11px;letter-spacing:0.1em;color:var(--amber);margin-bottom:6px;">Åpne fysiske kort</div>
+        ${b.text ? `<div style="color:var(--ink2);margin-bottom:8px;">${escapeHtml(b.text)}</div>` : ''}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${codes || '<span class="muted">(ingen koder)</span>'}</div>
+      </div>`;
+  }
+  if (b.type === 'question') {
+    const answered = st.answeredCorrect.has(b.id);
+    const opts = (b.options || []).map((o, i) => {
+      if (answered) {
+        return `<div style="padding:9px 12px;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule)'};border-radius:8px;margin-bottom:6px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};background:${o.correct ? 'var(--green-bg)' : 'transparent'};">${o.correct ? '✓ ' : ''}${escapeHtml(o.text || '')}</div>`;
+      }
+      return `<button onclick="ebPvAnswer('${b.id}', ${i})" style="display:block;width:100%;text-align:left;padding:9px 12px;border:1px solid var(--rule2);border-radius:8px;margin-bottom:6px;background:var(--paper);color:var(--ink);cursor:pointer;font-family:var(--font-serif);">${escapeHtml(o.text || '')}</button>`;
+    }).join('');
+    return `
+      <div style="margin:4px 0 10px;">
+        <div style="font-weight:600;margin-bottom:8px;color:var(--ink);">${escapeHtml(b.prompt || '')}${b.points ? ` <span class="muted" style="font-weight:400;font-size:12px;">(${b.points} p)</span>` : ''}</div>
+        ${opts}
+      </div>`;
+  }
+  return '';
 }
 
 function ebCardsTab() {
