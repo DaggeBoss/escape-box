@@ -1314,7 +1314,6 @@ function ebOpenPreview() {
     ibArmed: new Set(),
     openCards: new Set(),        // UI open/closed state
     seen: new Set(),             // cards auto-opened once on reveal
-    doneSeen: new Set(),         // cards auto-closed once on completion
   };
   let ov = document.getElementById('eb-pv-overlay');
   if (!ov) { ov = document.createElement('div'); ov.id = 'eb-pv-overlay'; document.body.appendChild(ov); }
@@ -1462,9 +1461,8 @@ function ebPvRender() {
     inner = ebPvIntro();
   } else {
     const { visible, done } = ebPvCompute();
-    // auto-open newly revealed cards; auto-close on completion (once each)
+    // auto-open newly revealed cards (cards stay open when completed — close manually)
     cfg.cards.forEach(c => { if (visible.has(c.id) && !st.seen.has(c.id)) { st.seen.add(c.id); st.openCards.add(c.id); } });
-    cfg.cards.forEach(c => { if (done.has(c.id) && !st.doneSeen.has(c.id)) { st.doneSeen.add(c.id); st.openCards.delete(c.id); } });
     inner = `
       <div style="flex:1;display:flex;min-height:0;">
         <div style="flex:0 0 320px;border-right:1px solid var(--rule);overflow:auto;padding:18px;background:var(--bg2);">
@@ -1592,11 +1590,11 @@ function ebPvWorkCard(card, done) {
   const isDone = done.has(card.id);
   const open = st.openCards.has(card.id);
   const head = `
-    <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
+    <div onclick="ebPvToggle('${card.id}')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:${isDone ? 'var(--green)' : 'var(--red)'};color:#fff;border-radius:8px 8px ${open ? '0 0' : '8px 8px'};">
       <span style="font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.05em;font-size:15px;flex:1;">${escapeHtml(ebT(card.title) || 'Card')}</span>
       ${card.code ? `<span class="col-mono" style="font-size:11px;opacity:0.85;">${escapeHtml(card.code)}</span>` : ''}
-      ${isDone ? '<span>✓</span>' : ''}
-      <span style="opacity:0.85;">${open ? '▾' : '▸'}</span>
+      ${isDone ? '<span style="font-size:15px;">✓</span>' : ''}
+      <span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--font-cond);text-transform:uppercase;font-size:12px;letter-spacing:0.06em;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.55);border-radius:7px;padding:4px 11px;white-space:nowrap;">${open ? 'Close ▾' : 'Open ▸'}</span>
     </div>`;
   let body = '';
   if (open) {
