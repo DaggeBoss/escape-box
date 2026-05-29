@@ -1730,45 +1730,47 @@ function ebCardsTab() {
 
 function ebTileHtml(card) {
   const isIb = card.surface === 'ib';
-  const badge = isIb
-    ? '<span class="badge amber">Investigation Board</span>'
-    : '<span class="badge blue">Arbeidsområde</span>';
-  const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">FYSISK · ${escapeHtml(card.code)}</span>` : '';
-  const fromStart = ((card.requires.conditions || []).length === 0)
-    ? '<span class="badge green">Fra start</span>' : '';
   const reqs = ebRequiresSummary(card);
   const trig = ebTriggersSummary(card);
-  const count = isIb ? '' : `<span class="muted" style="font-size:11px;">${(card.elements || []).length} element(s)</span>`;
+  const codeChip = card.code ? `<span class="badge dark col-mono" style="font-size:10px;">${escapeHtml(card.code)}</span>` : '';
+  const fromStart = ((card.requires.conditions || []).length === 0) ? '<span class="badge green">From start</span>' : '';
+  const editClick = isIb ? `ebIbModal('${card.id}')` : `ebOpenDesigner('${card.id}')`;
+  const thumb = isIb
+    ? `<div style="width:256px;height:150px;border:1px solid var(--rule);border-radius:6px;background:var(--bg2);display:flex;align-items:center;justify-content:center;color:var(--amber);font-family:var(--font-cond);text-transform:uppercase;letter-spacing:0.08em;">IB round</div>`
+    : ebMiniCanvasHtml(card, 256);
   return `
     <div draggable="true" ondragstart="ebDragStart(event, '${card.id}')" ondragover="event.preventDefault()" ondrop="ebDropOnCard(event, '${card.id}')"
-         style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;">
-      <div class="flex-gap" style="align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${badge} ${fromStart} ${codeChip}</div>
-      <div style="font-weight:600;font-size:14px;margin-bottom:4px;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
-      ${count}
-      <div class="muted" style="font-size:11px;margin-top:6px;line-height:1.5;">
-        <div><span style="color:var(--green);">▸ Vises når:</span> ${reqs}</div>
-        ${trig ? `<div><span style="color:var(--amber);">▸ Åpner:</span> ${trig}</div>` : ''}
+         style="background:var(--paper);border:1px solid var(--rule);border-left:3px solid ${isIb ? 'var(--amber)' : 'var(--blue)'};border-radius:10px;padding:10px;margin-bottom:8px;">
+      <div onclick="${editClick}" style="cursor:pointer;" title="Edit card">
+        ${thumb}
+        <div style="font-weight:600;font-size:14px;margin:8px 0 4px;color:var(--ink);">${escapeHtml(ebT(card.title) || '(untitled)')}</div>
       </div>
-      <div class="flex-gap" style="margin-top:8px;">
-        <button class="btn btn-sm" onclick="ebCardModal('${card.id}')">Rediger</button>
-        <button class="btn btn-sm btn-danger" onclick="ebDeleteCard('${card.id}')">Slett</button>
+      <div class="flex-gap" style="flex-wrap:wrap;gap:5px;margin-bottom:6px;">
+        <span class="badge ${isIb ? 'amber' : 'blue'}">${isIb ? 'IB' : 'Work'}</span>${fromStart}${codeChip}
+      </div>
+      <div class="muted" style="font-size:11px;line-height:1.5;margin-bottom:8px;">
+        <div><span style="color:var(--green);">▸ shows when:</span> ${reqs}</div>
+        ${trig ? `<div><span style="color:var(--amber);">▸ opens:</span> ${trig}</div>` : ''}
+      </div>
+      <div class="flex-gap">
+        ${isIb ? '' : `<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();ebTriggersModal('${card.id}')">Triggers</button>`}
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();ebDeleteCard('${card.id}')">Delete</button>
       </div>
     </div>`;
 }
 
 function ebRequiresSummary(card) {
   const conds = card.requires.conditions || [];
-  if (conds.length === 0) return 'fra start';
+  if (conds.length === 0) return 'from start';
   const parts = conds.map(c => {
     if (c.type === 'card_done') {
       const t = ebCardById(c.card_id);
-      return t ? `«${escapeHtml(ebT(t.title) || 'card')}» done` : '(slettet kort)';
+      return t ? `«${escapeHtml(ebT(t.title) || 'card')}» done` : '(deleted card)';
     }
-    if (c.type === 'code') return `kode ${escapeHtml(c.code)}`;
+    if (c.type === 'code') return `code ${escapeHtml(c.code)}`;
     return '?';
   });
-  const join = card.requires.mode === 'any' ? ' eller ' : ' og ';
-  return parts.join(join);
+  return parts.join(card.requires.mode === 'any' ? ' or ' : ' and ');
 }
 
 function ebTriggersSummary(card) {
@@ -1783,6 +1785,28 @@ function ebTriggersSummary(card) {
     if (hit) out.push(`«${escapeHtml(ebT(other.title) || 'card')}»`);
   });
   return out.join(', ');
+}
+
+/* Mini static render of a card's canvas (for the overview thumbnails) */
+function ebMiniCanvasHtml(card, width) {
+  const cw = (card.canvas && card.canvas.w) || 700;
+  const ch = (card.canvas && card.canvas.h) || 460;
+  const s = width / cw;
+  return `<div style="position:relative;width:${width}px;height:${Math.round(ch * s)}px;overflow:hidden;background:var(--paper);border:1px solid var(--rule);border-radius:6px;">
+    <div style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform:scale(${s});transform-origin:top left;">
+      ${(card.elements || []).map(ebMiniEl).join('')}
+    </div>
+  </div>`;
+}
+function ebMiniEl(el) {
+  const pos = `position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;box-sizing:border-box;overflow:hidden;`;
+  if (el.type === 'image') return `<div style="${pos}">${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;">` : ''}</div>`;
+  if (el.type === 'question') return `<div style="${pos}padding:6px 8px;"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div>${(el.options || []).map(o => `<div style="font-size:12px;color:${o.correct ? 'var(--green)' : 'var(--ink3)'};">${o.correct ? '✓ ' : '• '}${escapeHtml(ebT(o.text))}</div>`).join('')}</div>`;
+  if (el.type === 'password') return `<div style="${pos}padding:6px 8px;font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')}</div>`;
+  if (el.type === 'link') return `<div style="${pos}padding:6px 8px;font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
+  if (el.type === 'unlock') return `<div style="${pos}padding:6px 8px;font-size:12px;color:var(--amber);">${escapeHtml(ebT(el.label) || 'Open cards')}: ${escapeHtml((el.codes || []).join(', '))}</div>`;
+  const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
+  return `<div style="${pos}padding:6px 8px;${callout}font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;">${escapeHtml(ebT(el.text))}</div>`;
 }
 
 /* ─── Drag & drop ───────────────────────────────────────── */
@@ -1815,7 +1839,7 @@ function ebAddCard(track, surface) {
   const card = ebNormalizeCard({ id: ebUid('card'), surface, track, order: 1e9, title: surface === 'ib' ? 'IB round' : 'New card' }, 0);
   ebb.config.cards.push(card);
   ebNormalizeOrder();
-  ebCardModal(card.id);
+  if (surface === 'ib') ebIbModal(card.id); else ebOpenDesigner(card.id);
 }
 function ebDeleteCard(id) {
   const card = ebCardById(id);
@@ -1858,7 +1882,7 @@ function ebSetCardField(id, field, value) {
 function ebSetCardSurface(id, value) {
   const c = ebCardById(id); if (!c) return;
   c.surface = value === 'ib' ? 'ib' : 'work';
-  ebCardModal(id); // re-render for å bytte felter
+  if (c.surface === 'ib') ebIbModal(id); else ebTriggersModal(id);
 }
 function ebSetReqMode(id, mode) {
   const c = ebCardById(id); if (!c) return;
@@ -1868,18 +1892,18 @@ function ebAddCardCond(id) {
   const sel = $('#eb-cond-card'); if (!sel || !sel.value) return;
   const c = ebCardById(id); if (!c) return;
   c.requires.conditions.push({ type: 'card_done', card_id: sel.value });
-  ebCardModal(id);
+  ebReqRefresh();
 }
 function ebAddCodeCond(id) {
   const inp = $('#eb-cond-code'); if (!inp || !inp.value.trim()) return;
   const c = ebCardById(id); if (!c) return;
   c.requires.conditions.push({ type: 'code', code: inp.value.trim().toUpperCase() });
-  ebCardModal(id);
+  ebReqRefresh();
 }
 function ebRemoveCond(id, idx) {
   const c = ebCardById(id); if (!c) return;
   c.requires.conditions.splice(idx, 1);
-  ebCardModal(id);
+  ebReqRefresh();
 }
 function ebSetIbField(id, field, value) {
   const c = ebCardById(id); if (!c) return;
@@ -1892,79 +1916,79 @@ function ebSetIbField(id, field, value) {
   }
 }
 
-/* ─── Card settings modal (work + IB) ───────────────────── */
-function ebCardModal(id, gatedView) {
-  const c = ebCardById(id); if (!c) return;
-  const others = ebb.config.cards.filter(x => x.id !== id);
-  const conds = c.requires.conditions || [];
-  const gated = !!gatedView || conds.length > 0;
+/* ─── Triggers / links (overview metadata) + IB editor ──── */
+let ebReqHost = null;
+function ebReqRefresh() { if (ebReqHost) ebReqHost(); }
 
-  const condRows = conds.map((cond, i) => {
+function ebVisibilityHtml(id) {
+  const c = ebCardById(id); if (!c) return '';
+  const conds = c.requires.conditions || [];
+  const others = ebb.config.cards.filter(x => x.id !== id);
+  const rows = conds.map((cond, i) => {
     const label = cond.type === 'card_done'
       ? `«${escapeHtml(ebT((ebCardById(cond.card_id) || {}).title) || 'deleted card')}» done`
       : `code ${escapeHtml(cond.code)}`;
-    return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:4px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
-  }).join('') || '<div class="muted" style="font-size:12px;">No conditions yet.</div>';
-
-  const gatedBody = `
-    <div class="flex-gap" style="margin-bottom:10px;">
-      <span style="font-size:12px;color:var(--ink3);">Match</span>
-      <select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;">
-        <option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>all conditions</option>
-        <option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>at least one condition</option>
-      </select>
-    </div>
-    ${condRows}
-    <div class="field-row" style="margin-top:10px;align-items:flex-end;">
-      <div class="field"><label class="field-label">Require a card is completed</label>
-        <select id="eb-cond-card"><option value="">— select card —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(ebT(o.title) || o.id)}</option>`).join('')}</select>
-      </div>
-      <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Add</button>
-    </div>
-    <div class="field-row" style="align-items:flex-end;">
-      <div class="field"><label class="field-label">Require a code is entered</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
-      <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Add</button>
-    </div>`;
-
-  const fromStartBody = `<div class="muted" style="font-size:13px;">Active from start — shown as soon as the game begins.</div>`;
-
-  const layoutSection = c.surface === 'ib' ? ebIbFields(c) : `
+    return `<div class="flex-gap" style="align-items:center;justify-content:space-between;padding:3px 0;"><span style="font-size:13px;">${label}</span><button class="btn btn-sm btn-danger" onclick="ebRemoveCond('${id}', ${i})">×</button></div>`;
+  }).join('') || '<div class="muted" style="font-size:12px;">Active from start (no conditions).</div>';
+  const modeSel = conds.length > 1
+    ? `<div class="flex-gap" style="margin-bottom:8px;"><span style="font-size:12px;color:var(--ink3);">Match</span><select onchange="ebSetReqMode('${id}',this.value)" style="width:auto;"><option value="all" ${c.requires.mode !== 'any' ? 'selected' : ''}>all conditions</option><option value="any" ${c.requires.mode === 'any' ? 'selected' : ''}>at least one</option></select></div>`
+    : '';
+  const clearBtn = conds.length ? `<button class="btn btn-sm btn-ghost" style="margin-top:10px;" onclick="ebReqFromStart('${id}')">Set active from start</button>` : '';
+  return `
     <div class="panel" style="margin-top:14px;">
-      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▦</span> Card layout</div>
+      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Visible when</div>
       <div class="panel-body">
-        <div class="field"><label class="field-label">Card height (px)</label><input type="number" min="160" max="1400" value="${c.canvas.h}" onchange="ebSetCanvasHeight('${id}', this.value)"></div>
-        <div class="muted" style="font-size:13px;margin:6px 0 12px;">${(c.elements || []).length} element(s) on the canvas.</div>
-        <button class="btn" onclick="ebOpenDesigner('${id}')">Open canvas designer →</button>
+        ${modeSel}${rows}
+        <div class="field-row" style="margin-top:10px;align-items:flex-end;">
+          <div class="field"><label class="field-label">Require a card is completed</label>
+            <select id="eb-cond-card"><option value="">— select card —</option>${others.map(o => `<option value="${o.id}">${escapeHtml(ebT(o.title) || o.id)}</option>`).join('')}</select>
+          </div>
+          <button class="btn btn-sm btn-secondary" onclick="ebAddCardCond('${id}')">+ Add</button>
+        </div>
+        <div class="field-row" style="align-items:flex-end;">
+          <div class="field"><label class="field-label">Require a code is entered</label><input id="eb-cond-code" type="text" class="col-mono" placeholder="ABCD"></div>
+          <button class="btn btn-sm btn-secondary" onclick="ebAddCodeCond('${id}')">+ Add</button>
+        </div>
+        ${clearBtn}
       </div>
     </div>`;
+}
 
+const EB_TYPE_SELECT = (id, c) => `<select onchange="ebSetCardSurface('${id}',this.value)">
+    <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Work-area card</option>
+    <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board round</option>
+  </select>`;
+
+function ebTriggersModal(id) {
+  const c = ebCardById(id); if (!c) return;
+  ebReqHost = () => ebTriggersModal(id);
   openModal({
-    title: c.surface === 'ib' ? 'IB round' : 'Card',
+    title: 'Triggers & links',
+    size: 'lg',
+    body: `
+      <div class="field-row">
+        <div class="field"><label class="field-label">Type</label>${EB_TYPE_SELECT(id, c)}</div>
+        <div class="field"><label class="field-label">Physical code (optional)</label><input type="text" maxlength="6" class="col-mono" value="${escapeHtml(c.code)}" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Other cards can require this code.</span></div>
+      </div>
+      ${ebVisibilityHtml(id)}
+    `,
+    footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
+  });
+}
+
+function ebIbModal(id) {
+  const c = ebCardById(id); if (!c) return;
+  ebReqHost = () => ebIbModal(id);
+  openModal({
+    title: 'IB round',
     size: 'lg',
     body: `
       <div class="field-row">
         <div class="field"><label class="field-label">Title</label><input type="text" value="${escapeHtml(ebT(c.title))}" onchange="ebSetCardField('${id}','title',this.value)"></div>
-        <div class="field"><label class="field-label">Type</label>
-          <select onchange="ebSetCardSurface('${id}',this.value)">
-            <option value="work" ${c.surface !== 'ib' ? 'selected' : ''}>Work-area card</option>
-            <option value="ib" ${c.surface === 'ib' ? 'selected' : ''}>Investigation Board round</option>
-          </select>
-        </div>
+        <div class="field"><label class="field-label">Type</label>${EB_TYPE_SELECT(id, c)}</div>
       </div>
-      ${c.surface !== 'ib' ? `<div class="field"><label class="field-label">Physical code (optional)</label><input type="text" maxlength="6" value="${escapeHtml(c.code)}" class="col-mono" placeholder="ABCD" onchange="ebSetCardField('${id}','code',this.value)"><span class="field-hint">Set a code if this is a physical card.</span></div>` : ''}
-
-      <div class="panel" style="margin-top:14px;">
-        <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▸</span> Visible when</div>
-        <div class="panel-body">
-          <div class="flex-gap" style="margin-bottom:12px;">
-            <button class="btn btn-sm ${gated ? 'btn-ghost' : ''}" onclick="ebReqFromStart('${id}')">Active from start</button>
-            <button class="btn btn-sm ${gated ? '' : 'btn-ghost'}" onclick="ebReqGated('${id}')">Requires conditions</button>
-          </div>
-          ${gated ? gatedBody : fromStartBody}
-        </div>
-      </div>
-
-      ${layoutSection}
+      ${ebVisibilityHtml(id)}
+      ${ebIbFields(c)}
     `,
     footer: `<button class="btn" onclick="ebCloseCardModal()">Done</button>`,
   });
@@ -1999,24 +2023,24 @@ function ebDesignerRender() {
     <div class="page-header">
       <div>
         <div class="page-eyebrow">Card · ${escapeHtml(ebb.concept.name)}</div>
-        <div class="page-title">${escapeHtml(ebT(c.title) || 'Card')} — canvas</div>
+        <input value="${escapeHtml(ebT(c.title))}" placeholder="Card title" onchange="ebSetCardField('${c.id}','title',this.value)" style="font-family:var(--font-serif);font-size:22px;font-weight:600;border:none;border-bottom:1px dashed var(--rule);background:transparent;color:var(--ink);padding:2px 0;min-width:280px;">
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" onclick="ebExitDesigner()">← Back to flow</button>
-        <button class="btn btn-secondary" onclick="ebCardModal('${c.id}')">Card settings</button>
+        <button class="btn btn-secondary" onclick="ebTriggersModal('${c.id}')">Triggers</button>
         <button class="btn" onclick="ebSaveAll()">Save all</button>
       </div>
     </div>
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">＋</span> Add element <span class="ph-spacer"></span>
-        <span class="muted" style="font-size:11px;">Drag to move · drag the corner to resize · click to select</span>
+        <span class="muted" style="font-size:11px;">Drag the grip to move · drag the corner to resize · type directly into the elements</span>
       </div>
       <div class="panel-body"><div class="flex-gap" style="flex-wrap:wrap;">${tools}</div></div>
     </div>
     <div class="panel">
       <div class="panel-header"><span class="ph-icon">▦</span> Canvas <span class="muted" style="font-weight:400;font-size:11px;margin-left:8px;">${c.canvas.w}×${c.canvas.h} — same format as participant view</span></div>
       <div class="panel-body" style="overflow:auto;">
-        <div onclick="ebSelectEl(null)" style="display:inline-block;">
+        <div style="display:inline-block;">
           <div id="eb-canvas" style="position:relative;width:${c.canvas.w}px;height:${c.canvas.h}px;background:var(--paper);border:1px solid var(--rule2);box-shadow:0 2px 8px var(--shadow);">
             ${(c.elements || []).map(el => ebElBox(el)).join('')}
           </div>
@@ -2026,55 +2050,103 @@ function ebDesignerRender() {
   `;
 }
 
+/* Element on the designer canvas — inline editable (type directly) */
 function ebElBox(el) {
-  const sel = ebb.selEl === el.id;
-  const inner = ebElPreview(el);
-  const handles = sel ? `
-    <div onpointerdown="ebElResizeDown(event,'${el.id}')" style="position:absolute;right:-6px;bottom:-6px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;"></div>
-    <button onclick="event.stopPropagation();ebElementModal('${el.id}')" style="position:absolute;top:-12px;left:0;background:var(--blue);color:#fff;border:none;border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer;">Edit</button>
-    <button onclick="event.stopPropagation();ebDeleteEl('${el.id}')" style="position:absolute;top:-12px;right:0;background:var(--red);color:#fff;border:none;border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer;">×</button>` : '';
+  const id = el.id;
+  const grip = `<div onpointerdown="ebElDown(event,'${id}')" title="Drag to move" style="position:absolute;top:-10px;left:-10px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;background:var(--ink3);color:#fff;border-radius:5px;cursor:move;font-size:11px;z-index:4;">⠿</div>`;
+  const del = `<button onpointerdown="event.stopPropagation()" onclick="ebDeleteEl('${id}')" title="Delete" style="position:absolute;top:-10px;right:-10px;width:20px;height:20px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;z-index:4;">×</button>`;
+  const resize = `<div onpointerdown="ebElResizeDown(event,'${id}')" title="Resize" style="position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;background:var(--blue);border:2px solid var(--paper);border-radius:50%;cursor:nwse-resize;z-index:4;"></div>`;
   return `
-    <div data-elid="${el.id}" onpointerdown="ebElDown(event,'${el.id}')"
-         style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;
-                box-sizing:border-box;outline:${sel ? '2px solid var(--blue)' : '1px dashed var(--rule2)'};
-                background:rgba(255,255,255,0.4);overflow:hidden;cursor:move;">
-      ${inner}${handles}
+    <div data-elid="${id}" style="position:absolute;left:${el.x}px;top:${el.y}px;width:${el.w}px;height:${el.h}px;">
+      ${grip}${del}${resize}
+      <div style="width:100%;height:100%;box-sizing:border-box;outline:1px dashed var(--rule2);background:rgba(255,255,255,0.55);overflow:auto;">
+        ${ebElEdit(el)}
+      </div>
     </div>`;
 }
 
-function ebElPreview(el) {
-  const pad = 'padding:6px 8px;width:100%;height:100%;box-sizing:border-box;overflow:hidden;';
+function ebElEdit(el) {
+  const id = el.id;
+  const ce = (field, html, style) => `<div contenteditable="true" onblur="ebElText('${id}','${field}',this)" style="outline:none;${style}">${html}</div>`;
   if (el.type === 'image') {
-    return el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;pointer-events:none;">`
-      : `<div style="${pad}color:var(--ink3);font-size:12px;display:flex;align-items:center;justify-content:center;">No image</div>`;
+    return `<div style="position:relative;width:100%;height:100%;">
+      ${el.url ? `<img src="${escapeHtml(el.url)}" style="width:100%;height:100%;object-fit:cover;">` : `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink3);font-size:12px;">No image</div>`}
+      <button onclick="ebPickElImage('${id}')" class="btn btn-sm" style="position:absolute;bottom:4px;left:4px;">Upload</button>
+    </div>`;
   }
   if (el.type === 'question') {
-    return `<div style="${pad}"><div style="font-weight:600;font-size:13px;">${escapeHtml(ebT(el.prompt) || 'Question')}</div><div class="muted" style="font-size:11px;">${(el.options || []).length} options</div></div>`;
+    const opts = (el.options || []).map((o, i) => `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <button onclick="ebElOptCorrect('${id}',${i})" title="Mark correct" style="flex:0 0 auto;width:18px;height:18px;border-radius:50%;border:1px solid ${o.correct ? 'var(--green)' : 'var(--rule2)'};background:${o.correct ? 'var(--green)' : 'transparent'};color:#fff;cursor:pointer;font-size:11px;line-height:1;">${o.correct ? '✓' : ''}</button>
+        <div contenteditable="true" onblur="ebElOptText('${id}',${i},this)" style="flex:1;outline:none;border:1px solid var(--rule);border-radius:5px;padding:3px 6px;font-size:13px;">${escapeHtml(ebT(o.text))}</div>
+        <button onclick="ebElOptDel('${id}',${i})" style="flex:0 0 auto;background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;">×</button>
+      </div>`).join('');
+    return `<div style="padding:6px 8px;">
+      ${ce('prompt', escapeHtml(ebT(el.prompt)), 'font-weight:600;font-size:13px;margin-bottom:6px;')}
+      ${opts}
+      <div class="flex-gap" style="align-items:center;margin-top:4px;">
+        <button onclick="ebElOptAdd('${id}')" class="btn btn-sm btn-ghost">+ option</button>
+        <span style="font-size:11px;color:var(--ink3);">Points <input type="number" value="${el.points || 0}" onchange="ebElNum('${id}','points',this.value)" style="width:50px;"></span>
+      </div>
+    </div>`;
   }
   if (el.type === 'password') {
-    return `<div style="${pad}font-size:13px;">🔒 ${escapeHtml(ebT(el.label) || 'Code')} <span class="col-mono muted">(${escapeHtml(el.code || '—')})</span></div>`;
+    return `<div style="padding:6px 8px;">
+      ${ce('label', escapeHtml(ebT(el.label)), 'font-size:13px;margin-bottom:6px;')}
+      <div class="flex-gap" style="align-items:center;font-size:11px;color:var(--ink3);">
+        <span>code <input class="col-mono" value="${escapeHtml(el.code)}" onchange="ebElStr('${id}','code',this.value)" style="width:84px;text-transform:uppercase;"></span>
+        <span>pts <input type="number" value="${el.points || 0}" onchange="ebElNum('${id}','points',this.value)" style="width:50px;"></span>
+      </div>
+    </div>`;
   }
   if (el.type === 'link') {
-    return `<div style="${pad}font-size:13px;color:var(--blue);">🔗 ${escapeHtml(ebT(el.label) || el.url || 'Link')}</div>`;
+    return `<div style="padding:6px 8px;">
+      ${ce('label', escapeHtml(ebT(el.label)), 'font-size:13px;color:var(--blue);margin-bottom:4px;')}
+      <input value="${escapeHtml(el.url)}" onchange="ebElStr('${id}','url',this.value)" placeholder="https://…" style="width:100%;font-size:12px;">
+    </div>`;
   }
   if (el.type === 'unlock') {
-    return `<div style="${pad}font-size:12px;color:var(--amber);">Open cards: ${escapeHtml((el.codes || []).join(', ') || '—')}</div>`;
+    return `<div style="padding:6px 8px;">
+      ${ce('label', escapeHtml(ebT(el.label)), 'font-size:12px;color:var(--amber);margin-bottom:4px;')}
+      <input class="col-mono" value="${escapeHtml((el.codes || []).join(', '))}" onchange="ebElCodes('${id}',this.value)" placeholder="ABCD, EFGH" style="width:100%;font-size:12px;text-transform:uppercase;">
+    </div>`;
   }
-  const base = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
-  return `<div style="${pad}${base}font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);">${escapeHtml(ebT(el.text) || (el.type === 'info' ? 'Info' : 'Text'))}</div>`;
+  // text / info
+  const callout = el.type === 'info' ? 'background:var(--amber-bg);border-left:3px solid var(--amber);' : '';
+  const fmt = `<div class="flex-gap" style="gap:2px;padding:2px 4px;background:var(--bg2);border-top:1px solid var(--rule);">
+      <button onclick="ebElSize('${id}',-1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A−</button>
+      <button onclick="ebElSize('${id}',1)" class="btn btn-sm btn-ghost" style="padding:0 6px;">A+</button>
+      <button onclick="ebElAlign('${id}','left')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯇</button>
+      <button onclick="ebElAlign('${id}','center')" class="btn btn-sm btn-ghost" style="padding:0 6px;">≡</button>
+      <button onclick="ebElAlign('${id}','right')" class="btn btn-sm btn-ghost" style="padding:0 6px;">⯈</button>
+    </div>`;
+  return `<div style="display:flex;flex-direction:column;height:100%;${callout}">
+    ${ce('text', escapeHtml(ebT(el.text)), `flex:1;padding:6px 8px;font-size:${el.size || 15}px;text-align:${el.align || 'left'};color:var(--ink2);white-space:pre-wrap;overflow:auto;`)}
+    ${fmt}
+  </div>`;
 }
+
+/* inline element mutators */
+function ebElGet(elId) { const c = ebCardById(ebb.designId); return c && c.elements.find(e => e.id === elId); }
+function ebElText(elId, field, node) { const el = ebElGet(elId); if (!el) return; el[field] = { ...(el[field] || {}), [EB_LANG]: node.innerText }; }
+function ebElOptText(elId, idx, node) { const el = ebElGet(elId); if (!el || !el.options[idx]) return; el.options[idx].text = { ...(el.options[idx].text || {}), [EB_LANG]: node.innerText }; }
+function ebElOptCorrect(elId, idx) { const el = ebElGet(elId); if (!el) return; el.options.forEach((o, i) => { o.correct = (i === idx) ? !o.correct : false; }); ebDesignerRender(); }
+function ebElOptAdd(elId) { const el = ebElGet(elId); if (!el) return; el.options.push({ text: { [EB_LANG]: '' }, correct: false }); ebDesignerRender(); }
+function ebElOptDel(elId, idx) { const el = ebElGet(elId); if (!el) return; el.options.splice(idx, 1); ebDesignerRender(); }
+function ebElNum(elId, field, v) { const el = ebElGet(elId); if (!el) return; el[field] = parseInt(v, 10) || 0; }
+function ebElStr(elId, field, v) { const el = ebElGet(elId); if (!el) return; el[field] = field === 'code' ? v.trim().toUpperCase() : v.trim(); }
+function ebElCodes(elId, v) { const el = ebElGet(elId); if (!el) return; el.codes = v.split(',').map(s => s.trim().toUpperCase()).filter(Boolean); }
+function ebElSize(elId, d) { const el = ebElGet(elId); if (!el) return; el.size = Math.max(9, Math.min(48, (el.size || 15) + d)); ebDesignerRender(); }
+function ebElAlign(elId, a) { const el = ebElGet(elId); if (!el) return; el.align = a; ebDesignerRender(); }
 
 /* drag & resize (canvas is 1:1, so client px = design px) */
 function ebElDown(ev, id) {
-  if (ev.target && ev.target.tagName === 'BUTTON') return;
-  ev.stopPropagation();
-  ebb.selEl = id;
+  ev.stopPropagation(); ev.preventDefault();
   const el = ebCardById(ebb.designId).elements.find(e => e.id === id);
   if (!el) return;
   ebDrag = { id, mode: 'move', sx: ev.clientX, sy: ev.clientY, ox: el.x, oy: el.y, ow: el.w, oh: el.h };
   document.addEventListener('pointermove', ebDragMove);
   document.addEventListener('pointerup', ebDragUp);
-  ebDesignerRender();
 }
 function ebElResizeDown(ev, id) {
   ev.stopPropagation();
@@ -2111,101 +2183,19 @@ function ebDragUp() {
 function ebAddElement(type) {
   const c = ebCardById(ebb.designId); if (!c) return;
   const sizes = {
-    text: { w: 300, h: 60 }, info: { w: 320, h: 80 }, question: { w: 360, h: 140 },
-    password: { w: 260, h: 56 }, link: { w: 240, h: 44 }, image: { w: 220, h: 160 }, unlock: { w: 300, h: 56 },
+    text: { w: 320, h: 90 }, info: { w: 340, h: 90 }, question: { w: 380, h: 170 },
+    password: { w: 280, h: 80 }, link: { w: 260, h: 64 }, image: { w: 240, h: 170 }, unlock: { w: 320, h: 80 },
   };
-  const s = sizes[type] || { w: 220, h: 60 };
+  const s = sizes[type] || { w: 240, h: 80 };
   const el = ebNormalizeElement({ id: ebUid('el'), type, x: 24, y: 24, w: s.w, h: s.h });
   c.elements.push(el);
-  ebb.selEl = el.id;
   ebDesignerRender();
-  ebElementModal(el.id);
 }
 function ebSelectEl(id) { ebb.selEl = id; ebDesignerRender(); }
 function ebDeleteEl(id) {
   const c = ebCardById(ebb.designId); if (!c) return;
   c.elements = c.elements.filter(e => e.id !== id);
   if (ebb.selEl === id) ebb.selEl = null;
-  ebDesignerRender();
-}
-
-/* element editor modal */
-function ebElementModal(elId) {
-  const c = ebCardById(ebb.designId); if (!c) return;
-  const el = c.elements.find(e => e.id === elId); if (!el) return;
-  let fields = '';
-  if (el.type === 'text' || el.type === 'info') {
-    fields = `
-      <div class="field"><label class="field-label">Text</label><textarea id="eb-el-text" rows="4">${escapeHtml(ebT(el.text))}</textarea></div>
-      <div class="field-row">
-        <div class="field"><label class="field-label">Font size (px)</label><input id="eb-el-size" type="number" min="9" max="48" value="${el.size || 15}"></div>
-        <div class="field"><label class="field-label">Align</label><select id="eb-el-align">
-          ${['left', 'center', 'right'].map(a => `<option value="${a}" ${el.align === a ? 'selected' : ''}>${a}</option>`).join('')}
-        </select></div>
-      </div>`;
-  } else if (el.type === 'question') {
-    const optText = (el.options || []).map(o => (o.correct ? '*' : '') + ebT(o.text)).join('\n');
-    fields = `
-      <div class="field"><label class="field-label">Question</label><textarea id="eb-el-prompt" rows="2">${escapeHtml(ebT(el.prompt))}</textarea></div>
-      <div class="field"><label class="field-label">Answer options (one per line, * before the correct one)</label><textarea id="eb-el-options" rows="5" placeholder="*Correct answer&#10;Wrong answer&#10;Wrong answer">${escapeHtml(optText)}</textarea></div>
-      <div class="field"><label class="field-label">Points</label><input id="eb-el-points" type="number" value="${el.points || 0}"></div>`;
-  } else if (el.type === 'password') {
-    fields = `
-      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}" placeholder="Enter the code"></div>
-      <div class="field-row">
-        <div class="field"><label class="field-label">Correct code</label><input id="eb-el-code" type="text" class="col-mono" value="${escapeHtml(el.code)}"></div>
-        <div class="field"><label class="field-label">Points</label><input id="eb-el-points" type="number" value="${el.points || 0}"></div>
-      </div>`;
-  } else if (el.type === 'link') {
-    fields = `
-      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}"></div>
-      <div class="field"><label class="field-label">URL</label><input id="eb-el-url" type="text" value="${escapeHtml(el.url)}" placeholder="https://…"></div>`;
-  } else if (el.type === 'unlock') {
-    fields = `
-      <div class="field"><label class="field-label">Label</label><input id="eb-el-label" type="text" value="${escapeHtml(ebT(el.label))}" placeholder="Open the following cards"></div>
-      <div class="field"><label class="field-label">Physical codes (comma-separated)</label><input id="eb-el-codes" type="text" class="col-mono" value="${escapeHtml((el.codes || []).join(', '))}"></div>`;
-  } else if (el.type === 'image') {
-    fields = `
-      ${el.url ? `<img src="${escapeHtml(el.url)}" style="max-width:100%;max-height:200px;border:1px solid var(--rule);border-radius:6px;margin-bottom:10px;">` : ''}
-      <div class="field"><label class="field-label">Image</label><button class="btn btn-sm btn-secondary" onclick="ebPickElImage('${el.id}')">Upload image</button></div>
-      <div class="field"><label class="field-label">…or image URL</label><input id="eb-el-url" type="text" value="${escapeHtml(el.url)}" placeholder="https://…"></div>`;
-  }
-  openModal({
-    title: `Edit ${el.type}`,
-    body: fields,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Close</button><button class="btn" onclick="ebSaveElement('${el.id}')">Save</button>`,
-  });
-}
-
-function ebSaveElement(elId) {
-  const c = ebCardById(ebb.designId); if (!c) return;
-  const el = c.elements.find(e => e.id === elId); if (!el) return;
-  const setT = (field, val) => { el[field] = { ...(el[field] || {}), [EB_LANG]: val }; };
-  if (el.type === 'text' || el.type === 'info') {
-    setT('text', $('#eb-el-text').value);
-    el.size = parseInt($('#eb-el-size').value, 10) || 15;
-    el.align = $('#eb-el-align').value;
-  } else if (el.type === 'question') {
-    setT('prompt', $('#eb-el-prompt').value.trim());
-    el.options = $('#eb-el-options').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-      const correct = l.startsWith('*');
-      return { text: { [EB_LANG]: correct ? l.slice(1).trim() : l }, correct };
-    });
-    el.points = parseInt($('#eb-el-points').value, 10) || 0;
-  } else if (el.type === 'password') {
-    setT('label', $('#eb-el-label').value.trim());
-    el.code = $('#eb-el-code').value.trim().toUpperCase();
-    el.points = parseInt($('#eb-el-points').value, 10) || 0;
-  } else if (el.type === 'link') {
-    setT('label', $('#eb-el-label').value.trim());
-    el.url = $('#eb-el-url').value.trim();
-  } else if (el.type === 'unlock') {
-    setT('label', $('#eb-el-label').value.trim());
-    el.codes = $('#eb-el-codes').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  } else if (el.type === 'image') {
-    const u = $('#eb-el-url'); if (u) el.url = u.value.trim();
-  }
-  closeModal();
   ebDesignerRender();
 }
 
@@ -2219,50 +2209,23 @@ function ebPickElImage(elId) {
     showToast('Uploading image…', 'info');
     try {
       const res = await uploadImage(file, { scenario_id: ebb.conceptId, kind: 'cards' });
-      const c = ebCardById(ebb.designId);
-      const el = c && c.elements.find(e => e.id === elId);
+      const el = ebElGet(elId);
       if (el && res && res.url) { el.url = res.url; showToast('Image uploaded', 'success'); }
-      ebElementModal(elId);
+      ebDesignerRender();
     } catch (e) { showToast('Upload failed: ' + e.message, 'error'); }
   };
   inp.click();
 }
 
 
-// Sett kortet aktivt fra start (tøm betingelser)
+// Set card active from start (clear conditions)
 function ebReqFromStart(id) {
   const c = ebCardById(id); if (!c) return;
   c.requires.conditions = [];
-  ebCardModal(id);
+  ebReqRefresh();
 }
-// Vis betingelse-kontrollene (selv om ingen er lagt til ennå)
-function ebReqGated(id) { ebCardModal(id, true); }
 
 function ebCloseCardModal() { closeModal(); if (ebb.designId) ebDesignerRender(); else renderEbBuilder(); }
-
-function ebBlocksSection(c) {
-  const rows = (c.blocks || []).map((b, i) => {
-    let summary = '';
-    if (b.type === 'info') summary = escapeHtml((b.text || '').slice(0, 50));
-    else if (b.type === 'question') summary = escapeHtml((b.prompt || '').slice(0, 50));
-    else if (b.type === 'unlock') summary = 'Åpne fysiske kort: ' + escapeHtml((b.physical_codes || []).join(', '));
-    return `<tr><td style="width:120px;"><span class="badge dark">${({info:'Info',question:'Spørsmål',unlock:'Åpne kort'})[b.type] || b.type}</span></td>
-      <td><span class="muted" style="font-size:13px;">${summary}</span></td>
-      <td class="col-actions" style="width:130px;"><button class="btn btn-sm" onclick="ebBlockModal('${c.id}',${i})">Rediger</button><button class="btn btn-sm btn-danger" onclick="ebDeleteBlock('${c.id}',${i})">Slett</button></td></tr>`;
-  }).join('');
-  return `
-    <div class="panel" style="margin-top:14px;">
-      <div class="panel-header" style="font-size:13px;"><span class="ph-icon">▤</span> Innhold (blokker)
-        <span class="ph-spacer"></span>
-        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','info')">+ Info</button>
-        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','question')">+ Spørsmål</button>
-        <button class="btn btn-sm btn-secondary" onclick="ebAddBlock('${c.id}','unlock')">+ Åpne kort</button>
-      </div>
-      <div class="panel-body tight">
-        ${rows ? `<table class="data-table"><tbody>${rows}</tbody></table>` : '<div class="muted" style="padding:10px;">Ingen blokker ennå.</div>'}
-      </div>
-    </div>`;
-}
 
 function ebIbFields(c) {
   const ib = c.ib;
@@ -2286,65 +2249,6 @@ function ebIbFields(c) {
     </div>`;
 }
 
-/* ─── Blokker ───────────────────────────────────────────── */
-function ebAddBlock(cardId, type) {
-  const c = ebCardById(cardId); if (!c) return;
-  const base = { id: ebUid('blk'), type };
-  if (type === 'info') Object.assign(base, { text: '', media_url: '' });
-  else if (type === 'question') Object.assign(base, { prompt: '', options: [], points: 0 });
-  else if (type === 'unlock') Object.assign(base, { text: '', physical_codes: [] });
-  c.blocks.push(base);
-  ebBlockModal(cardId, c.blocks.length - 1);
-}
-function ebDeleteBlock(cardId, idx) {
-  const c = ebCardById(cardId); if (!c) return;
-  c.blocks.splice(idx, 1);
-  ebCardModal(cardId);
-}
-function ebBlockModal(cardId, idx) {
-  const c = ebCardById(cardId); if (!c) return;
-  const b = c.blocks[idx]; if (!b) return;
-  let fields = '';
-  if (b.type === 'info') {
-    fields = `
-      <div class="field"><label class="field-label">Tekst</label><textarea id="eb-blk-text" rows="4">${escapeHtml(b.text || '')}</textarea></div>
-      <div class="field"><label class="field-label">Media-URL (valgfritt)</label><input id="eb-blk-media" type="text" value="${escapeHtml(b.media_url || '')}" placeholder="https://…"></div>`;
-  } else if (b.type === 'question') {
-    const optText = (b.options || []).map(o => (o.correct ? '*' : '') + (o.text || '')).join('\n');
-    fields = `
-      <div class="field"><label class="field-label">Spørsmål</label><textarea id="eb-blk-prompt" rows="2">${escapeHtml(b.prompt || '')}</textarea></div>
-      <div class="field"><label class="field-label">Svaralternativer (ett per linje, * foran riktig)</label><textarea id="eb-blk-options" rows="5" placeholder="*Riktig svar&#10;Galt svar&#10;Galt svar">${escapeHtml(optText)}</textarea></div>
-      <div class="field"><label class="field-label">Poeng ved riktig</label><input id="eb-blk-points" type="number" value="${b.points || 0}"></div>`;
-  } else if (b.type === 'unlock') {
-    fields = `
-      <div class="field"><label class="field-label">Tekst</label><input id="eb-blk-text" type="text" value="${escapeHtml(b.text || '')}" placeholder="Åpne følgende fysiske kort:"></div>
-      <div class="field"><label class="field-label">Fysiske koder (kommaseparert)</label><input id="eb-blk-codes" type="text" class="col-mono" value="${escapeHtml((b.physical_codes || []).join(', '))}"></div>`;
-  }
-  openModal({
-    title: ({ info: 'Info-blokk', question: 'Spørsmål-blokk', unlock: 'Åpne kort-blokk' })[b.type],
-    body: fields,
-    footer: `<button class="btn btn-secondary" onclick="ebCardModal('${cardId}')">Avbryt</button><button class="btn" onclick="ebSaveBlock('${cardId}',${idx})">Lagre blokk</button>`,
-  });
-}
-function ebSaveBlock(cardId, idx) {
-  const c = ebCardById(cardId); if (!c) return;
-  const b = c.blocks[idx]; if (!b) return;
-  if (b.type === 'info') {
-    b.text = $('#eb-blk-text').value.trim();
-    b.media_url = $('#eb-blk-media').value.trim();
-  } else if (b.type === 'question') {
-    b.prompt = $('#eb-blk-prompt').value.trim();
-    b.options = $('#eb-blk-options').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-      const correct = l.startsWith('*');
-      return { text: correct ? l.slice(1).trim() : l, correct };
-    });
-    b.points = parseInt($('#eb-blk-points').value, 10) || 0;
-  } else if (b.type === 'unlock') {
-    b.text = $('#eb-blk-text').value.trim();
-    b.physical_codes = $('#eb-blk-codes').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  }
-  ebCardModal(cardId);
-}
 
 async function ebSaveAll() {
   try {
