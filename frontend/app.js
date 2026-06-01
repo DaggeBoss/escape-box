@@ -1975,10 +1975,12 @@ function ebMiniCanvasHtml(card, width) {
 function ebMiniCanvasResponsive(card) {
   const surface = card.surface === 'ib' ? 'ib' : 'work';
   const base = EB_CANVAS[surface];
-  const cw = base.w;               // standard bredde for flaten
-  const stdH = base.h;             // standard høyde (fast thumbnail-aspekt)
-  const ch = (card.canvas && card.canvas.h) || stdH; // faktisk korthøyde
-  const pct = (stdH / cw) * 100;   // thumbnail-aspekt = standard
+  const cw = base.w;               // standard bredde for flaten (beholdes → kolonnebredde stemmer)
+  const ch = (card.canvas && card.canvas.h) || base.h; // faktisk korthøyde
+  // Thumbnail-aspekt = arbeidskortenes proporsjon, uansett flate, så IB-kort
+  // blir like lave som de andre i oversikten. Toppen vises; resten kuttes/fylles.
+  const aspect = EB_CANVAS.work.h / EB_CANVAS.work.w;
+  const pct = aspect * 100;
   return `<div style="position:relative;width:100%;padding-bottom:${pct.toFixed(2)}%;overflow:hidden;background:var(--paper);border:1px solid var(--rule);border-radius:6px;">
     <div style="position:absolute;inset:0;">
       <div style="position:absolute;top:0;left:0;width:${cw}px;height:${ch}px;transform-origin:top left;" data-mini-cw="${cw}">
