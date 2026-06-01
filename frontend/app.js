@@ -3081,6 +3081,63 @@ views.live = async function (root) {
   await renderLiveView(root, state.currentEventId);
 };
 
+/* ─── GM live-view: kort-progresjon per lag ─────────────────
+   Bruker konseptets cards[] (hentet via /api/concepts/:id) og viser én
+   linje med alle kort: grå = ikke åpnet, amber = åpnet/ikke løst, grønn =
+   løst. Poeng + teller per lag. Nå mot MOCK-data; ekte data (sessions +
+   WebSocket) kobles på når deltager-runtimen finnes.
+   ────────────────────────────────────────────────────────── */
+
+// Konseptets kort, sortert som i spillflyten (track, order). IB + arbeid samlet.
+function gmConceptCards() {
+  const cfg = state.gmConfig;
+  if (!cfg || !Array.isArray(cfg.cards)) return [];
+  return [...cfg.cards].sort((a, b) => a.track - b.track || a.order - b.order);
+}
+
+// Deterministisk mock-progresjon per lag (så det ikke hopper ved hver render).
+function gmMockProgress(team, cards) {
+  const seed = (String(team.id || team.code || team.name) || '')
+    .split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const frac = ((seed % 100) / 100);
+  const solvedCount = Math.floor(frac * cards.length);
+  const opened = new Set();
+  const solved = new Set();
+  let score = 0;
+  cards.forEach((c, i) => {
+    if (i < solvedCount) {
+      opened.add(c.id); solved.add(c.id);
+      (c.elements || []).forEach(e => { if (e.points) score += e.points; });
+    } else if (i === solvedCount) {
+      opened.add(c.id);
+    }
+  });
+  return { opened, solved, score };
+}
+
+// Hent progresjon for et lag. I dag: mock. Senere: les fra session/puzzle_events.
+function gmTeamProgress(team, cards) {
+  return gmMockProgress(team, cards);
+}
+
+// Én kort-prikk: grå / amber (åpnet) / grønn (løst)
+function gmCardDot(card, prog) {
+  const solved = prog.solved.has(card.id);
+  const opened = prog.opened.has(card.id);
+  const isIb = card.surface === 'ib';
+  const bg = solved ? 'var(--green)' : opened ? 'var(--amber)' : 'var(--bg3)';
+  const fg = solved || opened ? '#fff' : 'var(--ink3)';
+  const title = `${ebT(card.title) || (isIb ? 'IB' : 'Kort')} — ${solved ? 'løst' : opened ? 'åpnet' : 'ikke åpnet'}`;
+  const mark = isIb ? '◆' : '■';
+  return `<span title="${escapeHtml(title)}" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;background:${bg};color:${fg};font-size:10px;flex:0 0 auto;">${mark}</span>`;
+}
+
+// Hele kort-linjen for ett lag
+function gmCardLine(cards, prog) {
+  if (cards.length === 0) return '<div class="muted" style="font-size:12px;">Ingen kort i konseptet.</div>';
+  return `<div style="display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;">${cards.map(c => gmCardDot(c, prog)).join('')}</div>`;
+}
+
 async function openLiveView(eventId) {
   state.currentEventId = eventId;
   // Subscribe via WS
@@ -3093,6 +3150,16 @@ async function openLiveView(eventId) {
 async function renderLiveView(root, eventId) {
   const ev = await api(`/api/events/${eventId}`);
   const sessions = await api(`/api/sessions/event/${eventId}/active`).catch(() => []);
+
+  // Hent konseptets config (kort) for progresjons-linjen. Feiler stille.
+  state.gmConfig = null;
+  if (ev.concept_id) {
+    try {
+      const concept = await api(`/api/concepts/${ev.concept_id}`);
+      state.gmConfig = concept.config || concept.scenario_data || null;
+    } catch (e) { /* ingen tilgang / ikke escape_box → kort-linje droppes */ }
+  }
+  const gmCards = gmConceptCards();
 
   const teamsWithSessions = (ev.teams || []).map(t => {
     const session = sessions.find(s => s.team_id === t.id);
@@ -3120,10 +3187,19 @@ async function renderLiveView(root, eventId) {
     </div>
 
     <div class="panel">
-      <div class="panel-header"><span class="ph-icon">◍</span> Lag <span class="ph-spacer"></span><span style="font-size:11px;opacity:0.7;">Oppdateres i sanntid</span></div>
+      <div class="panel-header"><span class="ph-icon">◍</span> Lag — progresjon <span class="ph-spacer"></span><span class="badge amber" style="font-size:10px;">TESTDATA (mock)</span></div>
       <div class="panel-body">
+        <div class="muted" style="font-size:11px;margin-bottom:10px;">
+          <span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:var(--bg3);display:inline-block;"></span> ikke åpnet</span>
+          &nbsp;&nbsp;<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:var(--amber);display:inline-block;"></span> åpnet</span>
+          &nbsp;&nbsp;<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:12px;height:12px;border-radius:3px;background:var(--green);display:inline-block;"></span> løst</span>
+          &nbsp;&nbsp; ■ arbeidskort &nbsp; ◆ IB-kort
+        </div>
         <div class="live-grid" id="live-teams">
-          ${teamsWithSessions.map(t => renderTeamCard(t)).join('')}
+          ${teamsWithSessions
+            .map(t => ({ t, prog: gmTeamProgress(t, gmCards) }))
+            .sort((a, b) => b.prog.score - a.prog.score)
+            .map(({ t, prog }) => renderTeamCard(t, gmCards, prog)).join('')}
         </div>
       </div>
     </div>
@@ -3166,26 +3242,24 @@ async function renderLiveView(root, eventId) {
   };
 }
 
-function renderTeamCard(t) {
+function renderTeamCard(t, cards, prog) {
+  cards = cards || [];
+  prog = prog || { opened: new Set(), solved: new Set(), score: 0 };
   const s = t.session;
-  let stateLabel = '<span class="badge">Venter</span>';
-  let metaRows = '';
-  if (s) {
-    stateLabel = '<span class="badge green">● Aktiv</span>';
-    const elapsed = s.started_at ? Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000) : 0;
+  const solvedCount = prog.solved.size;
+  const total = cards.length;
+  const pct = total ? Math.round((solvedCount / total) * 100) : 0;
+
+  let stateLabel = s ? '<span class="badge green">● Aktiv</span>' : '<span class="badge">Venter</span>';
+  let timeRow = '';
+  if (s && s.started_at) {
+    const elapsed = Math.floor((Date.now() - new Date(s.started_at).getTime()) / 1000);
     const remaining = (s.time_limit_seconds || 3600) - elapsed;
-    metaRows = `
-      <span class="tcb-label">Startet</span><span class="tcb-val">${formatDuration(elapsed)} siden</span>
-      <span class="tcb-label">Igjen</span><span class="tcb-val" style="color:${remaining < 60 ? 'var(--red)' : remaining < 300 ? 'var(--amber)' : 'var(--green)'};">${formatDuration(Math.max(0, remaining))}</span>
-      <span class="tcb-label">Puzzle</span><span class="tcb-val">${s.current_puzzle ?? 0}</span>
-      <span class="tcb-label">Hint</span><span class="tcb-val">${s.hints_used ?? 0}</span>
-    `;
+    timeRow = `<span class="tcb-label">Igjen</span><span class="tcb-val" style="color:${remaining < 60 ? 'var(--red)' : remaining < 300 ? 'var(--amber)' : 'var(--green)'};">${formatDuration(Math.max(0, remaining))}</span>`;
   } else {
-    metaRows = `
-      <span class="tcb-label">Lagkode</span><span class="tcb-val">${escapeHtml(t.code)}</span>
-      <span class="tcb-label">PIN</span><span class="tcb-val">${escapeHtml(t.pin)}</span>
-    `;
+    timeRow = `<span class="tcb-label">Lagkode</span><span class="tcb-val">${escapeHtml(t.code)}</span>`;
   }
+
   return `
     <div class="team-card ${s ? 'active' : ''}" data-team="${t.id}">
       <div class="team-card-header">
@@ -3193,10 +3267,14 @@ function renderTeamCard(t) {
         <span class="team-name">${escapeHtml(t.name)}</span>
         ${stateLabel}
       </div>
-      <div class="team-card-body">${metaRows}</div>
+      <div style="display:flex;align-items:baseline;gap:14px;padding:4px 0 2px;">
+        <span style="font-family:var(--font-serif);font-size:24px;font-weight:700;color:var(--ink);">${prog.score} <span style="font-size:13px;font-weight:400;color:var(--ink3);">p</span></span>
+        <span style="font-size:13px;color:var(--ink2);">${solvedCount}/${total} løst <span class="muted">(${pct}%)</span></span>
+      </div>
+      ${gmCardLine(cards, prog)}
+      <div class="team-card-body" style="margin-top:4px;">${timeRow}</div>
       <div class="team-card-actions">
         <button class="btn btn-sm btn-secondary" onclick="showTeamQR(${state.currentEventId}, ${t.id})">QR</button>
-        ${s ? '' : ''}
       </div>
     </div>
   `;
