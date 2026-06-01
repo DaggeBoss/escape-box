@@ -1250,6 +1250,8 @@ function ebNormalizeCard(c, i) {
       conditions: Array.isArray(req.conditions) ? req.conditions : [],
     },
     canvas: { w: base.w, h: (c.canvas && c.canvas.h) || base.h },
+    points: typeof c.points === 'number' ? c.points : 0,
+    readLabel: ebToLang(c.readLabel),
     elements: Array.isArray(c.elements) ? c.elements.map(ebNormalizeElement) : [],
   };
 }
@@ -1455,6 +1457,15 @@ function ebPvCompute() {
   }
   const visible = new Set();
   cards.forEach(c => { if (ebPvReqMet(c, done, st.enteredCodes)) visible.add(c.id); });
+  // Krediter kortets egne poeng én gang når det først blir fullført
+  st.cardCredited = st.cardCredited || new Set();
+  cards.forEach(c => {
+    if (done.has(c.id) && c.points && !st.cardCredited.has(c.id)) {
+      st.cardCredited.add(c.id);
+      st.score += c.points;
+      st.cardScore[c.id] = (st.cardScore[c.id] || 0) + c.points;
+    }
+  });
   return { visible, done };
 }
 
@@ -1698,7 +1709,7 @@ function ebPvWorkCard(card, done) {
   if (open) {
     const completable = (card.elements || []).some(e => e.type === 'question' || e.type === 'password' || (e.type === 'minigame' && e.mg_url && (e.mg_code || e.points)));
     const readBtn = (!completable && !isDone)
-      ? `<div style="padding:10px 14px;text-align:right;border-top:1px solid var(--rule);"><button class="btn btn-sm" onclick="ebPvRead('${card.id}')">Mark as read</button></div>`
+      ? `<div style="padding:10px 14px;text-align:right;border-top:1px solid var(--rule);"><button class="btn btn-sm" onclick="ebPvRead('${card.id}')">${escapeHtml(ebT(card.readLabel) || 'Mark as read')}</button></div>`
       : '';
     body = `<div style="border:1px solid var(--rule);border-top:none;border-radius:0 0 8px 8px;background:var(--paper);">
       ${ebPvCanvasHtml(card)}
@@ -1914,6 +1925,11 @@ function ebTileHtml(card) {
         <button class="btn btn-sm btn-ghost" style="padding:0 6px;font-size:11px;" onclick="event.stopPropagation();ebOpenDesigner('${card.id}')" title="Rediger">✎</button>
         <button class="btn btn-sm btn-ghost" style="padding:0 6px;font-size:11px;color:var(--red);" onclick="event.stopPropagation();ebDeleteCard('${card.id}')" title="Slett">✕</button>
       </div>
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-top:1px solid var(--rule);background:var(--bg2);font-size:10px;color:var(--ink3);">
+        <span style="flex:0 0 auto;">Card pts</span>
+        <input type="number" value="${card.points || 0}" onclick="event.stopPropagation()" onchange="ebSetCardPoints('${card.id}',this.value)" style="width:54px;font-size:11px;padding:2px 4px;">
+        <input type="text" value="${escapeHtml(ebT(card.readLabel))}" placeholder="Mark as read" onclick="event.stopPropagation()" onchange="ebSetCardRead('${card.id}',this.value)" title="Button text (info cards)" style="flex:1;min-width:0;font-size:11px;padding:2px 4px;">
+      </div>
     </div>`;
 }
 
@@ -2070,6 +2086,14 @@ function ebSetCardField(id, field, value) {
   if (field === 'code') c.code = value.trim().toUpperCase();
   else if (field === 'title') c.title = { ...(c.title || {}), [EB_LANG]: value };
   else c[field] = value;
+}
+function ebSetCardPoints(id, value) {
+  const c = ebCardById(id); if (!c) return;
+  c.points = parseInt(value, 10) || 0;
+}
+function ebSetCardRead(id, value) {
+  const c = ebCardById(id); if (!c) return;
+  c.readLabel = { ...(c.readLabel || {}), [EB_LANG]: value };
 }
 /* ─── Canvas designer (full page, work cards) ───────────── */
 let ebDrag = null;
@@ -3108,6 +3132,7 @@ function gmMockProgress(team, cards) {
     if (i < solvedCount) {
       opened.add(c.id); solved.add(c.id);
       (c.elements || []).forEach(e => { if (e.points) score += e.points; });
+      if (c.points) score += c.points;
     } else if (i === solvedCount) {
       opened.add(c.id);
     }
